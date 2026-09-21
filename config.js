@@ -1,11 +1,9 @@
 // Firebase Web App configuration.
-// Firebase Console -> Project settings -> Your apps -> Web app -> SDK setup and configuration.
-// This browser config is not a server secret. Security is enforced by Firebase Authentication + Firestore Rules.
 window.NATUREGEN_FIREBASE_CONFIG = {
-  apiKey: "PASTE_FIREBASE_API_KEY",
-  authDomain: "PASTE_PROJECT_ID.firebaseapp.com",
-  projectId: "PASTE_PROJECT_ID",
-  storageBucket: "PASTE_PROJECT_ID.firebasestorage.app",
-  messagingSenderId: "PASTE_MESSAGING_SENDER_ID",
-  appId: "PASTE_FIREBASE_APP_ID"
+  apiKey: "AIzaSyCvFD8V60yugkos26GoVIvI5Pga6BxQ2mg",
+  authDomain: "naturegen-distribution.firebaseapp.com",
+  projectId: "naturegen-distribution",
+  storageBucket: "naturegen-distribution.firebasestorage.app",
+  messagingSenderId: "321429469336",
+  appId: "1:321429469336:web:714ca31682b5db280b38ed"
 };
