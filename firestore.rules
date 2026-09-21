@@ -1,0 +1,101 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function myUserPath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
+    function activeUser() {
+      return signedIn() && exists(myUserPath()) && get(myUserPath()).data.active == true;
+    }
+    function isAdmin() { return activeUser() && get(myUserPath()).data.role == 'admin'; }
+    function isInventory() { return activeUser() && get(myUserPath()).data.role == 'inventory'; }
+    function isSalesman() { return activeUser() && get(myUserPath()).data.role == 'salesman'; }
+    function isRecovery() { return activeUser() && get(myUserPath()).data.role == 'recovery'; }
+    function saleBelongsToMe(saleId) {
+      return get(/databases/$(database)/documents/sales/$(saleId)).data.salesmanId == request.auth.uid;
+    }
+    function validPaymentUpdate() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['paidAmount','paymentStatus','updatedAt'])
+        && request.resource.data.paidAmount >= resource.data.paidAmount
+        && request.resource.data.paidAmount <= resource.data.total;
+    }
+
+    match /users/{uid} {
+      allow read: if activeUser();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /products/{productId} {
+      allow read: if activeUser();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || isInventory() ||
+        (isSalesman()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stockQty','updatedAt'])
+          && request.resource.data.stockQty >= 0
+          && request.resource.data.stockQty <= resource.data.stockQty);
+    }
+
+    match /customers/{customerId} {
+      allow read: if isAdmin() || isInventory() || isRecovery() ||
+        (isSalesman() && resource.data.assignedSalesmanId == request.auth.uid);
+      allow create: if isAdmin() ||
+        (isSalesman() && request.resource.data.assignedSalesmanId == request.auth.uid);
+      allow update: if isAdmin() ||
+        (isSalesman()
+          && resource.data.assignedSalesmanId == request.auth.uid
+          && request.resource.data.assignedSalesmanId == request.auth.uid);
+      allow delete: if isAdmin();
+    }
+
+    match /sales/{saleId} {
+      allow read: if isAdmin() || isInventory() || isRecovery() ||
+        (isSalesman() && resource.data.salesmanId == request.auth.uid);
+      allow create: if isAdmin() ||
+        (isSalesman()
+          && request.resource.data.salesmanId == request.auth.uid
+          && request.resource.data.createdBy == request.auth.uid);
+      allow update: if isAdmin() ||
+        ((isRecovery() || (isSalesman() && resource.data.salesmanId == request.auth.uid))
+          && validPaymentUpdate());
+      allow delete: if isAdmin();
+    }
+
+    match /payments/{paymentId} {
+      allow read: if isAdmin() || isRecovery() ||
+        (isSalesman() && resource.data.salesmanId == request.auth.uid);
+      allow create: if isAdmin() || isRecovery() ||
+        (isSalesman()
+          && request.resource.data.salesmanId == request.auth.uid
+          && saleBelongsToMe(request.resource.data.saleId));
+      allow update, delete: if isAdmin();
+    }
+
+    match /stockMovements/{movementId} {
+      allow read: if isAdmin() || isInventory();
+      allow create: if isAdmin() || isInventory() ||
+        (isSalesman()
+          && request.resource.data.enteredBy == request.auth.uid
+          && request.resource.data.movementType == 'sale'
+          && request.resource.data.qtyChange < 0);
+      allow update, delete: if isAdmin();
+    }
+
+    match /expenses/{expenseId} {
+      allow read, create, update, delete: if isAdmin();
+    }
+
+    match /settings/{settingId} {
+      allow read: if activeUser();
+      allow write: if isAdmin();
+    }
+
+    match /counters/{counterId} {
+      allow read: if isAdmin() || isSalesman();
+      allow create: if isAdmin();
+      allow update: if isAdmin() ||
+        (isSalesman()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['next'])
+          && request.resource.data.next == resource.data.next + 1);
+      allow delete: if isAdmin();
+    }
+  }
+}
