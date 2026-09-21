@@ -1,68 +1,114 @@
-NATUREGEN DISTRIBUTION ERP — ONLINE MULTI-USER SETUP
+NATUREGEN DISTRIBUTION ERP — FIREBASE + GITHUB PAGES
 ====================================================
+No Python. Multi-computer / mobile. Central Firebase database.
 
-This is a no-Python browser application. It uses Supabase for login, PostgreSQL database, Row Level Security and live multi-user data.
+ARCHITECTURE
+- GitHub Pages: frontend hosting
+- Firebase Authentication: user login
+- Cloud Firestore: live central data
+- Firestore Security Rules: role permissions
 
-1) CREATE SUPABASE PROJECT
-- Go to https://supabase.com and create a project.
-- Open SQL Editor.
-- Paste the complete contents of schema.sql and Run once.
+ROLES
+- Admin: full ERP, users, products, inventory, sales, recovery, expenses, reports, settings
+- Salesman: own customers, own sales, own recovery; sale automatically deducts stock including free scheme quantity
+- Inventory: stock receiving/adjustment, stock movement history, invoices/customers view
+- Recovery: invoices, customers, outstanding and payments
 
-2) CREATE ADMIN LOGIN
-- Supabase Dashboard → Authentication → Users → Add user.
-- Create your admin email/password.
-- SQL Editor: run this, replacing the email:
-  update public.profiles set role='admin', full_name='Naturegen Admin'
-  where id=(select id from auth.users where email='YOUR_ADMIN_EMAIL');
+STEP 1 — CREATE FIREBASE PROJECT
+1. Open Firebase Console: https://console.firebase.google.com/
+2. Create project: Naturegen Distribution
+3. Add a Web App (</> icon). App name: Naturegen Distribution ERP
+4. Firebase will show firebaseConfig. Keep that page open.
 
-3) CONNECT THE WEBSITE
-- Supabase Dashboard → Project Settings → API.
-- Copy Project URL and Publishable/anon key.
-- Open config.js and paste both values.
-- NEVER paste a service_role/secret key into config.js.
+STEP 2 — ENABLE EMAIL/PASSWORD LOGIN
+Firebase Console -> Authentication -> Get started -> Sign-in method -> Email/Password -> Enable -> Save.
 
-4) HOST IT ONLINE
-Any static host works because the database is Supabase:
-- Netlify Drop (simple)
-- Cloudflare Pages
-- GitHub Pages
-- Your own WordPress hosting subfolder/domain
-Upload: index.html, styles.css, app.js, config.js.
+STEP 3 — CREATE FIRESTORE DATABASE
+Firebase Console -> Firestore Database -> Create database.
+Choose Production mode and a suitable region.
 
-5) CREATE STAFF USERS
-- Create each user in Supabase Dashboard → Authentication → Users.
-- New users are automatically created as role = salesman.
-- Login as Admin in Naturegen ERP → Users & Roles and change role to Inventory / Recovery / Salesman as needed.
-- Add route/area and monthly target.
+STEP 4 — INSTALL SECURITY RULES
+Firestore Database -> Rules.
+Open firestore.rules from this repository, copy all text, paste into Rules editor, then Publish.
 
-ROLE ACCESS
-Admin: full dashboard, products, inventory, all sales, recoveries, expenses, reports, users, settings.
-Inventory: products/stock and stock movements; can add/adjust stock through controlled stock function.
-Salesman: create customers assigned to self, enter own sales, see own invoices/performance, record recovery only against own invoices.
-Recovery: view all invoices/outstanding and record payments.
+STEP 5 — CREATE FIRST ADMIN AUTH USER
+Authentication -> Users -> Add user.
+Use your admin email/password.
+Open that user and copy its UID.
 
-IMPORTANT BUSINESS LOGIC
-- 10+1 scheme is calculated automatically from each product's scheme settings.
-- Sale transaction locks stock rows, checks availability, creates invoice/items and deducts paid + free quantities atomically.
-- Two users selling at the same time cannot legitimately drive stock below zero through the sale function.
-- All devices use the same cloud database.
-- Realtime subscriptions refresh live dashboard/inventory when products, sales, customers or payments change.
+STEP 6 — CREATE FIRST ADMIN PROFILE IN FIRESTORE
+Firestore Database -> Data -> Start collection.
+Collection ID: users
+Document ID: paste the exact UID from Authentication.
+Add fields:
+  fullName       string   Naturegen Admin
+  email          string   your admin email
+  role           string   admin
+  phone          string   (optional)
+  routeArea      string   (optional)
+  monthlyTarget  number   0
+  active         boolean  true
+Save.
 
-INITIAL DATA INCLUDED
-Aimacid Syrup 120 ml: MRP 190, sale 65, cost 35, opening stock 10,400, scheme 10+1.
-Iron Syrup 120 ml: sale 90, cost 35, opening stock 2,600, scheme 10+1.
-All values can be changed by Admin.
+STEP 7 — CONNECT config.js
+Open config.js and replace the PASTE_ values with the exact Firebase web app configuration values.
+Example:
+window.NATUREGEN_FIREBASE_CONFIG = {
+  apiKey: "...",
+  authDomain: "naturegen-distribution.firebaseapp.com",
+  projectId: "naturegen-distribution",
+  storageBucket: "naturegen-distribution.firebasestorage.app",
+  messagingSenderId: "...",
+  appId: "..."
+};
+Firebase web configuration is intended to be present in browser apps. Never put service-account private keys or server secrets in this repository.
 
-SECURITY
-- Row Level Security (RLS) is enabled.
-- The browser uses only a publishable/anon key.
-- Keep service_role/secret keys out of the browser files.
-- For production, disable public signup in Supabase Auth and create staff users only from the admin dashboard in Supabase.
+STEP 8 — AUTHORIZED DOMAIN FOR GITHUB PAGES
+Authentication -> Settings -> Authorized domains.
+Add: ifsha530.github.io
+(If Firebase already allows your deployed domain, no change is needed.)
 
-FILES
-index.html      Main app shell
-styles.css      Responsive desktop/mobile UI
-app.js          App logic
-config.js       Supabase connection values
-schema.sql      Database + RLS + transaction functions
-README_SETUP.txt This setup guide
+STEP 9 — GITHUB PAGES
+GitHub repository -> Settings -> Pages.
+Source: Deploy from a branch
+Branch: main
+Folder: /(root)
+Save.
+Live URL should be:
+https://ifsha530.github.io/naturegen-distribution-erp/
+
+STEP 10 — FIRST LOGIN + INITIAL DATA
+Login with the Admin email/password.
+Go to Settings.
+Click "Initialize Aimacid + Iron Data" once.
+It creates:
+- Aimacid Syrup 120 ml: MRP 190, sale 65, cost 35, opening stock 10,400, scheme 10+1
+- Iron Syrup 120 ml: sale 90, cost 35, opening stock 2,600, scheme 10+1
+- Invoice counter
+- Company settings
+Opening stock and prices can be edited later by Admin.
+
+CREATING STAFF USERS
+Admin -> Users & Roles -> Create User Login.
+Create Salesman / Inventory / Recovery users with a temporary password.
+The employee can use "Forgot password?" to set/change a password through email.
+Setting Active = No blocks ERP database access even if the Firebase Auth login still exists.
+
+HOW SALES WORK
+- Salesman logs in from phone/PC.
+- Adds/selects customer.
+- Enters paid quantity.
+- 10+1 free quantity calculates automatically.
+- Firestore transaction checks current stock and deducts paid + free units atomically.
+- Invoice is linked permanently to the salesman.
+- Admin sees salesman-wise sales, recovery, outstanding and target achievement live.
+
+BACKUP
+Admin -> Reports -> Export JSON Backup.
+Download a backup regularly and store it safely.
+
+IMPORTANT SECURITY
+- Do NOT upload any Firebase Admin SDK service-account JSON.
+- Do NOT upload private/server keys.
+- Only the normal Firebase Web App config belongs in config.js.
+- Keep firestore.rules published; the frontend alone is not a security boundary.
