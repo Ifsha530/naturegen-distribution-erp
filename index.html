@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0b5d4b" />
+  <title>Naturegen Distribution ERP</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="toast" class="toast"></div>
+
+  <section id="loginView" class="auth-shell">
+    <div class="auth-card">
+      <div class="brand-mark">N</div>
+      <h1>Naturegen Distribution</h1>
+      <p class="muted">Online Multi-User Distribution ERP</p>
+      <form id="loginForm" class="stack">
+        <label>Email<input id="loginEmail" type="email" autocomplete="username" required placeholder="user@example.com"></label>
+        <label>Password<input id="loginPassword" type="password" autocomplete="current-password" required placeholder="••••••••"></label>
+        <button class="btn primary" type="submit">Sign in</button>
+      </form>
+      <div id="configWarning" class="warning hidden">Supabase is not connected yet. Open <b>config.js</b> and add your Project URL and publishable/anon key.</div>
+    </div>
+  </section>
+
+  <div id="appView" class="app hidden">
+    <aside class="sidebar">
+      <div class="sidebar-brand"><span class="brand-mark small">N</span><div><b>Naturegen</b><small>Distribution ERP</small></div></div>
+      <nav id="nav"></nav>
+      <div class="sidebar-user">
+        <div id="userName">User</div>
+        <small id="userRole">role</small>
+        <button id="logoutBtn" class="btn ghost full">Logout</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h2 id="pageTitle">Dashboard</h2>
+          <div id="syncStatus" class="sync">Connecting…</div>
+        </div>
+        <div class="top-actions">
+          <button id="refreshBtn" class="btn ghost">Refresh</button>
+        </div>
+      </header>
+
+      <section id="dashboardPage" class="page"></section>
+      <section id="salesPage" class="page hidden"></section>
+      <section id="customersPage" class="page hidden"></section>
+      <section id="inventoryPage" class="page hidden"></section>
+      <section id="recoveryPage" class="page hidden"></section>
+      <section id="expensesPage" class="page hidden"></section>
+      <section id="reportsPage" class="page hidden"></section>
+      <section id="usersPage" class="page hidden"></section>
+      <section id="settingsPage" class="page hidden"></section>
+    </main>
+  </div>
+
+  <div id="modal" class="modal hidden" aria-hidden="true">
+    <div class="modal-card">
+      <div class="modal-head"><h3 id="modalTitle">Form</h3><button id="modalClose" class="icon-btn" aria-label="Close">×</button></div>
+      <div id="modalBody"></div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
