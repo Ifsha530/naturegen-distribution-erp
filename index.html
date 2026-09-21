@@ -6,16 +6,20 @@
   <meta name="theme-color" content="#0b5d4b" />
   <meta name="description" content="Naturegen Distribution Online Multi-User ERP" />
   <title>Naturegen Distribution ERP</title>
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="styles.css?v=20260921-option1" />
 </head>
 <body>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <section id="loginView" class="auth-shell">
     <div class="auth-card">
-      <div class="brand-mark">N</div>
-      <h1>Naturegen Distribution</h1>
-      <p class="muted">Online Multi-User Distribution ERP</p>
+      <div class="login-brand">
+        <img src="assets/naturegen.logo.png" alt="Naturegen Laboratory" class="brand-logo login-brand-logo">
+        <div>
+          <h1>Naturegen Distribution</h1>
+          <p class="muted">Online Multi-User Distribution ERP</p>
+        </div>
+      </div>
       <form id="loginForm" class="stack">
         <label>Email<input id="loginEmail" type="email" autocomplete="username" required placeholder="user@example.com"></label>
         <label>Password<input id="loginPassword" type="password" autocomplete="current-password" required placeholder="••••••••"></label>
@@ -29,7 +33,10 @@
 
   <div id="appView" class="app hidden">
     <aside class="sidebar">
-      <div class="sidebar-brand"><span class="brand-mark small">N</span><div><b>Naturegen</b><small>Distribution ERP</small></div></div>
+      <div class="sidebar-brand">
+        <img src="assets/naturegen.logo.png" alt="Naturegen Laboratory" class="brand-logo sidebar-logo">
+        <div><b>Naturegen</b><small>Distribution ERP</small></div>
+      </div>
       <nav id="nav"></nav>
       <div class="sidebar-user">
         <div id="userName">User</div>
@@ -68,7 +75,7 @@
     </div>
   </div>
 
-  <script src="config.js?v=20260921b"></script>
-  <script type="module" src="app.js?v=20260921b"></script>
+  <script src="config.js?v=20260921-option1"></script>
+  <script type="module" src="app.js?v=20260921-option1"></script>
 </body>
 </html>
