@@ -114,7 +114,7 @@ async function startLiveData(){
   attachCollection('customers','customers');
   attachCollection('users','users');
   attachCollection('sales','sales');
-  attachCollection('payments','payments');
+  if(can('admin','recovery','salesman')) attachCollection('payments','payments'); else state.payments=[];
   if(can('admin')) attachCollection('expenses','expenses'); else state.expenses=[];
   if(can('admin','inventory')) attachCollection('stockMovements','movements'); else state.movements=[];
   state.unsubs.push(onSnapshot(doc(db,'settings','company'), s=>{ state.settings=s.exists()?{id:s.id,...s.data()}:null; renderPage(); }));
