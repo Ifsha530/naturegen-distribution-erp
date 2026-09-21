@@ -2,14 +2,27 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
-    function myUserPath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
     function activeUser() {
-      return signedIn() && exists(myUserPath()) && get(myUserPath()).data.active == true;
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.active == true;
     }
-    function isAdmin() { return activeUser() && get(myUserPath()).data.role == 'admin'; }
-    function isInventory() { return activeUser() && get(myUserPath()).data.role == 'inventory'; }
-    function isSalesman() { return activeUser() && get(myUserPath()).data.role == 'salesman'; }
-    function isRecovery() { return activeUser() && get(myUserPath()).data.role == 'recovery'; }
+    function isAdmin() {
+      return activeUser()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+    function isInventory() {
+      return activeUser()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'inventory';
+    }
+    function isSalesman() {
+      return activeUser()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'salesman';
+    }
+    function isRecovery() {
+      return activeUser()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'recovery';
+    }
     function saleBelongsToMe(saleId) {
       return getAfter(/databases/$(database)/documents/sales/$(saleId)).data.salesmanId == request.auth.uid;
     }
