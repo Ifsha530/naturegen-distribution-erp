@@ -11,7 +11,7 @@ service cloud.firestore {
     function isSalesman() { return activeUser() && get(myUserPath()).data.role == 'salesman'; }
     function isRecovery() { return activeUser() && get(myUserPath()).data.role == 'recovery'; }
     function saleBelongsToMe(saleId) {
-      return get(/databases/$(database)/documents/sales/$(saleId)).data.salesmanId == request.auth.uid;
+      return getAfter(/databases/$(database)/documents/sales/$(saleId)).data.salesmanId == request.auth.uid;
     }
     function validPaymentUpdate() {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['paidAmount','paymentStatus','updatedAt'])
