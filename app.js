@@ -1,205 +1,370 @@
-(() => {
-  'use strict';
+import { initializeApp, deleteApp } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js';
+import {
+  getAuth, setPersistence, browserLocalPersistence, signInWithEmailAndPassword,
+  signOut, onAuthStateChanged, sendPasswordResetEmail, createUserWithEmailAndPassword
+} from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
+import {
+  getFirestore, collection, doc, getDoc, getDocs, setDoc, addDoc, updateDoc,
+  query, where, onSnapshot, runTransaction, serverTimestamp, Timestamp, writeBatch
+} from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
-  const C = window.NATUREGEN_CONFIG || {};
-  const configured = C.SUPABASE_URL && C.SUPABASE_KEY && !C.SUPABASE_URL.includes('PASTE_') && !C.SUPABASE_KEY.includes('PASTE_');
-  const sb = configured ? window.supabase.createClient(C.SUPABASE_URL, C.SUPABASE_KEY, {
-    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
-  }) : null;
+const C = window.NATUREGEN_FIREBASE_CONFIG || {};
+const configured = Boolean(
+  C.apiKey && C.projectId && C.appId &&
+  !String(C.apiKey).includes('PASTE_') && !String(C.projectId).includes('PASTE_') && !String(C.appId).includes('PASTE_')
+);
 
-  const $ = (s) => document.querySelector(s);
-  const $$ = (s) => [...document.querySelectorAll(s)];
-  const fmt = (n) => new Intl.NumberFormat('en-PK', { maximumFractionDigits: 2 }).format(Number(n || 0));
-  const money = (n) => `Rs. ${fmt(n)}`;
-  const date = (v) => v ? new Date(v).toLocaleDateString('en-PK') : '';
-  const dt = (v) => v ? new Date(v).toLocaleString('en-PK') : '';
-  const esc = (v='') => String(v).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
-  const monthStart = () => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); };
+const app = configured ? initializeApp(C) : null;
+const auth = configured ? getAuth(app) : null;
+const db = configured ? getFirestore(app) : null;
+if (auth) setPersistence(auth, browserLocalPersistence).catch(console.error);
 
-  const state = { session:null, me:null, products:[], customers:[], profiles:[], sales:[], payments:[], expenses:[], movements:[], settings:null, channel:null, page:'dashboard' };
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => [...document.querySelectorAll(s)];
+const esc = (v='') => String(v ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+const fmt = (n) => new Intl.NumberFormat('en-PK', { maximumFractionDigits: 2 }).format(Number(n || 0));
+const money = (n) => `Rs. ${fmt(n)}`;
+const todayISO = () => new Date().toISOString().slice(0,10);
+const monthStart = () => new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+const asDate = (v) => {
+  if (!v) return null;
+  if (v?.toDate) return v.toDate();
+  if (v instanceof Date) return v;
+  const d = new Date(v); return Number.isNaN(d.getTime()) ? null : d;
+};
+const date = (v) => asDate(v)?.toLocaleDateString('en-PK') || '';
+const dt = (v) => asDate(v)?.toLocaleString('en-PK') || '';
+const tsFromInput = (v) => Timestamp.fromDate(new Date(`${v}T12:00:00`));
+const sortDesc = (rows, field) => [...rows].sort((a,b)=>(asDate(b[field])?.getTime()||0)-(asDate(a[field])?.getTime()||0));
+const sortAscText = (rows, field) => [...rows].sort((a,b)=>String(a[field]||'').localeCompare(String(b[field]||'')));
 
-  function toast(msg, error=false){ const el=$('#toast'); el.textContent=msg; el.className=`toast show${error?' error':''}`; clearTimeout(el._t); el._t=setTimeout(()=>el.className='toast',3200); }
-  function showModal(title, html){ $('#modalTitle').textContent=title; $('#modalBody').innerHTML=html; $('#modal').classList.remove('hidden'); $('#modal').setAttribute('aria-hidden','false'); }
-  function closeModal(){ $('#modal').classList.add('hidden'); $('#modal').setAttribute('aria-hidden','true'); }
-  function role(){ return state.me?.role || ''; }
-  function can(...roles){ return roles.includes(role()); }
-  function profileName(id){ return state.profiles.find(x=>x.id===id)?.full_name || '—'; }
-  function customerName(id){ return state.customers.find(x=>x.id===id)?.shop_name || '—'; }
-  function productName(id){ return state.products.find(x=>x.id===id)?.name || '—'; }
-  function badgeStatus(s){ const cls=s==='paid'?'ok':s==='partial'?'warn':'danger'; return `<span class="badge ${cls}">${esc(s)}</span>`; }
-  function setSync(text){ $('#syncStatus').textContent=text; }
+const state = {
+  user:null, me:null, page:'dashboard',
+  products:[], customers:[], users:[], sales:[], payments:[], expenses:[], movements:[], settings:null,
+  unsubs:[], liveReady:false
+};
 
-  const navByRole = {
-    admin:[['dashboard','Dashboard','⌂'],['sales','Sales & Invoices','🧾'],['customers','Customers','◫'],['inventory','Inventory','▣'],['recovery','Recovery','₨'],['expenses','Expenses','−'],['reports','Reports','▤'],['users','Users & Roles','♙'],['settings','Settings','⚙']],
-    inventory:[['dashboard','Dashboard','⌂'],['sales','Invoices','🧾'],['customers','Customers','◫'],['inventory','Inventory','▣']],
-    salesman:[['dashboard','My Dashboard','⌂'],['sales','My Sales','🧾'],['customers','My Customers','◫'],['recovery','My Recovery','₨']],
-    recovery:[['dashboard','Dashboard','⌂'],['sales','Invoices','🧾'],['customers','Customers','◫'],['recovery','Recovery','₨']]
+function toast(msg, error=false){
+  const el=$('#toast'); el.textContent=msg; el.className=`toast show${error?' error':''}`;
+  clearTimeout(el._t); el._t=setTimeout(()=>el.className='toast',3400);
+}
+function showModal(title, html){ $('#modalTitle').textContent=title; $('#modalBody').innerHTML=html; $('#modal').classList.remove('hidden'); $('#modal').setAttribute('aria-hidden','false'); }
+function closeModal(){ $('#modal').classList.add('hidden'); $('#modal').setAttribute('aria-hidden','true'); }
+function role(){ return state.me?.role || ''; }
+function can(...roles){ return roles.includes(role()); }
+function profileName(id){ return state.users.find(x=>x.id===id)?.fullName || '—'; }
+function customerName(id){ return state.customers.find(x=>x.id===id)?.shopName || '—'; }
+function productName(id){ return state.products.find(x=>x.id===id)?.name || '—'; }
+function setSync(text){ $('#syncStatus').textContent=text; }
+function badgeStatus(s){ const cls=s==='paid'?'ok':s==='partial'?'warn':'danger'; return `<span class="badge ${cls}">${esc(s||'unpaid')}</span>`; }
+function activeProducts(){ return state.products.filter(p=>p.active!==false); }
+function accessibleSales(){ return state.sales; }
+function calcStatus(total, paid){ return Number(paid||0) >= Number(total||0)-0.001 ? 'paid' : Number(paid||0)>0 ? 'partial' : 'unpaid'; }
+
+const navByRole = {
+  admin:[['dashboard','Dashboard','⌂'],['sales','Sales & Invoices','🧾'],['customers','Customers','◫'],['inventory','Inventory','▣'],['recovery','Recovery','₨'],['expenses','Expenses','−'],['reports','Reports','▤'],['users','Users & Roles','♙'],['settings','Settings','⚙']],
+  inventory:[['dashboard','Dashboard','⌂'],['sales','Invoices','🧾'],['customers','Customers','◫'],['inventory','Inventory','▣']],
+  salesman:[['dashboard','My Dashboard','⌂'],['sales','My Sales','🧾'],['customers','My Customers','◫'],['recovery','My Recovery','₨']],
+  recovery:[['dashboard','Dashboard','⌂'],['sales','Invoices','🧾'],['customers','Customers','◫'],['recovery','Recovery','₨']]
+};
+
+function renderNav(){
+  const items=navByRole[role()]||[];
+  $('#nav').innerHTML=items.map(([id,label,icon])=>`<button class="nav-btn ${state.page===id?'active':''}" data-page="${id}"><b>${icon}</b><span>${label}</span></button>`).join('');
+  $$('#nav .nav-btn').forEach(b=>b.onclick=()=>go(b.dataset.page));
+}
+function go(page){
+  const allowed=(navByRole[role()]||[]).some(x=>x[0]===page); if(!allowed) page='dashboard';
+  state.page=page; $$('.page').forEach(p=>p.classList.add('hidden')); $(`#${page}Page`)?.classList.remove('hidden');
+  $('#pageTitle').textContent=(navByRole[role()]||[]).find(x=>x[0]===page)?.[1]||'Naturegen'; renderNav(); renderPage();
+}
+function renderPage(){
+  const fn={dashboard:renderDashboard,sales:renderSales,customers:renderCustomers,inventory:renderInventory,recovery:renderRecovery,expenses:renderExpenses,reports:renderReports,users:renderUsers,settings:renderSettings}[state.page];
+  if(fn) fn();
+}
+
+function clearListeners(){ state.unsubs.forEach(u=>{try{u();}catch{}}); state.unsubs=[]; state.liveReady=false; }
+function userQueryFor(collectionName){
+  const ref=collection(db,collectionName);
+  if(role()==='salesman'){
+    if(collectionName==='sales' || collectionName==='payments') return query(ref,where('salesmanId','==',state.user.uid));
+    if(collectionName==='customers') return query(ref,where('assignedSalesmanId','==',state.user.uid));
+  }
+  return ref;
+}
+function attachCollection(name, target, transform=(x)=>x){
+  const q=userQueryFor(name);
+  const unsub=onSnapshot(q, snap=>{
+    state[target]=snap.docs.map(d=>transform({id:d.id,...d.data()}));
+    if(target==='products') state.products=sortAscText(state.products,'name');
+    if(target==='customers') state.customers=sortAscText(state.customers,'shopName');
+    if(target==='users') state.users=sortAscText(state.users,'fullName');
+    if(target==='sales') state.sales=sortDesc(state.sales,'saleDate');
+    if(target==='payments') state.payments=sortDesc(state.payments,'paymentDate');
+    if(target==='expenses') state.expenses=sortDesc(state.expenses,'expenseDate');
+    if(target==='movements') state.movements=sortDesc(state.movements,'createdAt');
+    setSync(`Live • ${new Date().toLocaleTimeString('en-PK')}`); renderPage();
+  }, err=>{ console.error(name,err); setSync(`Sync error: ${name}`); toast(`${name}: ${err.message}`,true); });
+  state.unsubs.push(unsub);
+}
+
+async function startLiveData(){
+  clearListeners();
+  attachCollection('products','products');
+  attachCollection('customers','customers');
+  attachCollection('users','users');
+  attachCollection('sales','sales');
+  attachCollection('payments','payments');
+  if(can('admin')) attachCollection('expenses','expenses'); else state.expenses=[];
+  if(can('admin','inventory')) attachCollection('stockMovements','movements'); else state.movements=[];
+  state.unsubs.push(onSnapshot(doc(db,'settings','company'), s=>{ state.settings=s.exists()?{id:s.id,...s.data()}:null; renderPage(); }));
+  state.liveReady=true;
+}
+
+async function loadProfile(user){
+  const snap=await getDoc(doc(db,'users',user.uid));
+  if(!snap.exists()) return null;
+  const p={id:snap.id,...snap.data()};
+  if(p.active===false) return null;
+  return p;
+}
+
+function showLogin(){ $('#appView').classList.add('hidden'); $('#loginView').classList.remove('hidden'); }
+function showApp(){ $('#loginView').classList.add('hidden'); $('#appView').classList.remove('hidden'); }
+
+function renderDashboard(){
+  const start=monthStart(); const sales=accessibleSales().filter(s=>(asDate(s.saleDate)||new Date(0))>=start);
+  const total=sales.reduce((a,s)=>a+Number(s.total||0),0);
+  const collected=sales.reduce((a,s)=>a+Number(s.paidAmount||0),0);
+  const outstanding=accessibleSales().reduce((a,s)=>a+Math.max(0,Number(s.total||0)-Number(s.paidAmount||0)),0);
+  const stock=state.products.reduce((a,p)=>a+Number(p.stockQty||0),0);
+  const low=activeProducts().filter(p=>Number(p.stockQty||0)<=Number(p.lowStockThreshold||0));
+  let perf='';
+  if(can('admin')){
+    const reps=state.users.filter(p=>p.role==='salesman'&&p.active!==false);
+    perf=`<div class="section-head"><h3>Salesman Performance — This Month</h3></div><div class="table-wrap"><table class="table"><thead><tr><th>Salesman</th><th>Route</th><th>Invoices</th><th>Sales</th><th>Recovery</th><th>Outstanding</th><th>Target</th><th>Achievement</th></tr></thead><tbody>${reps.map(p=>{
+      const ss=sales.filter(s=>s.salesmanId===p.id), st=ss.reduce((a,s)=>a+Number(s.total||0),0), rec=ss.reduce((a,s)=>a+Number(s.paidAmount||0),0), out=ss.reduce((a,s)=>a+Math.max(0,Number(s.total||0)-Number(s.paidAmount||0)),0), pct=Number(p.monthlyTarget||0)>0?Math.min(100,st/Number(p.monthlyTarget)*100):0;
+      return `<tr><td><b>${esc(p.fullName)}</b></td><td>${esc(p.routeArea||'—')}</td><td>${ss.length}</td><td>${money(st)}</td><td>${money(rec)}</td><td>${money(out)}</td><td>${money(p.monthlyTarget)}</td><td><div>${pct.toFixed(1)}%</div><div class="progress"><span style="width:${pct}%"></span></div></td></tr>`;
+    }).join('')||'<tr><td colspan="8" class="empty">No salesman users yet.</td></tr>'}</tbody></table></div>`;
+  }
+  $('#dashboardPage').innerHTML=`
+    <div class="grid cards">
+      <div class="card stat"><small>${can('salesman')?'My ':''}Sales This Month</small><strong>${money(total)}</strong><div class="sub">${sales.length} invoice(s)</div></div>
+      <div class="card stat"><small>Collected This Month</small><strong>${money(collected)}</strong><div class="sub">Accessible invoices</div></div>
+      <div class="card stat"><small>Outstanding</small><strong>${money(outstanding)}</strong><div class="sub">Current receivables</div></div>
+      <div class="card stat"><small>Total Stock Units</small><strong>${fmt(stock)}</strong><div class="sub">${low.length} low-stock product(s)</div></div>
+    </div>
+    ${low.length?`<div class="section-head"><h3>Low Stock Alerts</h3></div><div class="grid">${low.map(p=>`<div class="card"><b>${esc(p.name)}</b><div class="kpi-line"><span>Available</span><strong>${fmt(p.stockQty)}</strong></div><div class="kpi-line"><span>Alert level</span><span>${fmt(p.lowStockThreshold)}</span></div></div>`).join('')}</div>`:''}
+    ${perf}
+    <div class="section-head"><h3>Recent Invoices</h3></div>${salesTable(accessibleSales().slice(0,8),false)}
+  `;
+}
+
+function salesTable(rows,actions=true){
+  return `<div class="table-wrap"><table class="table"><thead><tr><th>Invoice</th><th>Date</th><th>Customer</th><th>Salesman</th><th>Total</th><th>Paid</th><th>Balance</th><th>Status</th>${actions?'<th></th>':''}</tr></thead><tbody>${rows.map(s=>`<tr><td><b>${esc(s.invoiceNo)}</b></td><td>${date(s.saleDate)}</td><td>${esc(customerName(s.customerId))}</td><td>${esc(profileName(s.salesmanId))}</td><td>${money(s.total)}</td><td>${money(s.paidAmount)}</td><td>${money(Number(s.total||0)-Number(s.paidAmount||0))}</td><td>${badgeStatus(s.paymentStatus)}</td>${actions?`<td><button class="btn ghost small" data-invoice="${s.id}">View</button></td>`:''}</tr>`).join('')||`<tr><td colspan="${actions?9:8}" class="empty">No invoices found.</td></tr>`}</tbody></table></div>`;
+}
+
+function renderSales(){
+  const reps=state.users.filter(u=>u.role==='salesman'&&u.active!==false);
+  const canCreate=can('admin','salesman');
+  $('#salesPage').innerHTML=`<div class="section-head"><div><h3>${can('salesman')?'My Sales':'Sales & Invoices'}</h3><div class="muted">Stock is deducted automatically when a sale is saved.</div></div>${canCreate?'<button id="newSaleBtn" class="btn primary">+ New Sale</button>':''}</div>
+  <div class="filters"><label>Search<input id="saleSearch" placeholder="Invoice / customer"></label>${can('admin')?`<label>Salesman<select id="saleRepFilter"><option value="">All</option>${reps.map(r=>`<option value="${r.id}">${esc(r.fullName)}</option>`).join('')}</select></label>`:''}</div><div id="salesTableHost">${salesTable(accessibleSales())}</div>`;
+  if(canCreate) $('#newSaleBtn').onclick=openSaleForm;
+  const refresh=()=>{
+    const term=($('#saleSearch')?.value||'').toLowerCase(), rep=$('#saleRepFilter')?.value||'';
+    const rows=accessibleSales().filter(s=>(!rep||s.salesmanId===rep) && (!term||String(s.invoiceNo||'').toLowerCase().includes(term)||customerName(s.customerId).toLowerCase().includes(term)));
+    $('#salesTableHost').innerHTML=salesTable(rows); bindInvoiceButtons();
   };
+  $('#saleSearch').oninput=refresh; if($('#saleRepFilter')) $('#saleRepFilter').onchange=refresh; bindInvoiceButtons();
+}
+function bindInvoiceButtons(){ $$('[data-invoice]').forEach(b=>b.onclick=()=>openInvoice(b.dataset.invoice)); }
 
-  function renderNav(){
-    const items=navByRole[role()]||[];
-    $('#nav').innerHTML=items.map(([id,label,icon])=>`<button class="nav-btn ${state.page===id?'active':''}" data-page="${id}"><b>${icon}</b><span>${label}</span></button>`).join('');
-    $$('#nav .nav-btn').forEach(b=>b.onclick=()=>go(b.dataset.page));
-  }
-  function go(page){ state.page=page; $$('.page').forEach(p=>p.classList.add('hidden')); $(`#${page}Page`)?.classList.remove('hidden'); $('#pageTitle').textContent=(navByRole[role()]||[]).find(x=>x[0]===page)?.[1]||'Naturegen'; renderNav(); renderPage(); }
-  function renderPage(){
-    const fn={dashboard:renderDashboard,sales:renderSales,customers:renderCustomers,inventory:renderInventory,recovery:renderRecovery,expenses:renderExpenses,reports:renderReports,users:renderUsers,settings:renderSettings}[state.page];
-    if(fn) fn();
-  }
+function openSaleForm(){
+  if(!state.customers.length) return toast('Add a customer first.',true);
+  if(!activeProducts().length) return toast('No active products available.',true);
+  const reps=state.users.filter(u=>u.role==='salesman'&&u.active!==false);
+  const salesmanSelect=can('admin')?`<label>Salesman<select id="saleSalesman" required><option value="">Select salesman</option>${reps.map(r=>`<option value="${r.id}">${esc(r.fullName)} — ${esc(r.routeArea||'')}</option>`).join('')}</select></label>`:`<input id="saleSalesman" type="hidden" value="${state.user.uid}">`;
+  showModal('New Sale / Invoice',`<form id="saleForm" class="stack">
+    <div class="form-grid"><label>Date<input id="saleDate" type="date" value="${todayISO()}" required></label>${salesmanSelect}<label class="full">Customer<select id="saleCustomer" required><option value="">Select pharmacy/customer</option>${state.customers.map(c=>`<option value="${c.id}">${esc(c.shopName)}${c.routeArea?' — '+esc(c.routeArea):''}</option>`).join('')}</select></label></div>
+    <div><b>Products</b><div class="help">Enter paid quantity. Free quantity is calculated from each product's scheme.</div></div>
+    <div class="sale-lines">${activeProducts().map(p=>`<div class="sale-line" data-product="${p.id}"><div class="wide"><b>${esc(p.name)}</b><div class="metric-note">Stock ${fmt(p.stockQty)} • Scheme ${p.schemeBuy||0}+${p.schemeFree||0} • Price ${money(p.salePrice)}</div></div><label>Paid Qty<input class="line-qty" type="number" min="0" step="1" value="0"></label><label>Free<input class="line-free" value="0" disabled></label><label>Unit Price<input class="line-price" type="number" min="0" step="0.01" value="${Number(p.salePrice||0)}" ${can('admin')?'':'readonly'}></label><div class="line-total">${money(0)}</div></div>`).join('')}</div>
+    <div class="form-grid"><label>Discount<input id="saleDiscount" type="number" min="0" step="0.01" value="0"></label><label>Received Now<input id="salePaid" type="number" min="0" step="0.01" value="0"></label><label class="full">Notes<textarea id="saleNotes"></textarea></label></div>
+    <div class="card"><div class="kpi-line"><span>Gross</span><strong id="saleGross">${money(0)}</strong></div><div class="kpi-line"><span>Discount</span><span id="saleDiscountView">${money(0)}</span></div><div class="kpi-line"><span>Invoice Total</span><strong id="saleTotal">${money(0)}</strong></div></div>
+    <button class="btn primary" type="submit">Save Sale & Deduct Stock</button>
+  </form>`);
+  const recalc=()=>{
+    let gross=0;
+    $$('.sale-line').forEach(row=>{
+      const p=state.products.find(x=>x.id===row.dataset.product); const qty=Math.max(0,Math.floor(Number(row.querySelector('.line-qty').value||0))); const price=Math.max(0,Number(row.querySelector('.line-price').value||0));
+      const free=(p?.schemeBuy||0)>0?Math.floor(qty/Number(p.schemeBuy))*Number(p.schemeFree||0):0;
+      row.querySelector('.line-free').value=free; const lt=qty*price; gross+=lt; row.querySelector('.line-total').textContent=money(lt);
+    });
+    const disc=Math.max(0,Number($('#saleDiscount').value||0)), total=Math.max(0,gross-disc); $('#saleGross').textContent=money(gross); $('#saleDiscountView').textContent=money(disc); $('#saleTotal').textContent=money(total);
+    $('#salePaid').max=String(total);
+  };
+  $$('.line-qty,.line-price').forEach(i=>i.oninput=recalc); $('#saleDiscount').oninput=recalc; recalc();
+  $('#saleForm').onsubmit=saveSale;
+}
 
-  async function query(table, opts={}){
-    let q=sb.from(table).select(opts.select||'*');
-    if(opts.order) q=q.order(opts.order.col,{ascending:opts.order.asc??false});
-    if(opts.limit) q=q.limit(opts.limit);
-    const {data,error}=await q; if(error) throw error; return data||[];
-  }
+async function saveSale(e){
+  e.preventDefault();
+  const salesmanId=$('#saleSalesman').value, customerId=$('#saleCustomer').value;
+  if(!salesmanId||!customerId) return toast('Select salesman and customer.',true);
+  if(can('salesman') && salesmanId!==state.user.uid) return toast('Salesman mismatch.',true);
+  const items=[];
+  $$('.sale-line').forEach(row=>{
+    const p=state.products.find(x=>x.id===row.dataset.product), paidQty=Math.max(0,Math.floor(Number(row.querySelector('.line-qty').value||0))), unitPrice=Math.max(0,Number(row.querySelector('.line-price').value||0));
+    if(p && paidQty>0){ const freeQty=Number(p.schemeBuy||0)>0?Math.floor(paidQty/Number(p.schemeBuy))*Number(p.schemeFree||0):0; items.push({productId:p.id,sku:p.sku||'',name:p.name,paidQty,freeQty,issuedQty:paidQty+freeQty,unitPrice,lineTotal:paidQty*unitPrice,costPrice:Number(p.costPrice||0),mrp:Number(p.mrp||0)}); }
+  });
+  if(!items.length) return toast('Enter at least one product quantity.',true);
+  const gross=items.reduce((a,i)=>a+i.lineTotal,0), discount=Math.max(0,Number($('#saleDiscount').value||0)), total=Math.max(0,gross-discount), paidNow=Math.max(0,Number($('#salePaid').value||0));
+  if(paidNow>total+0.001) return toast('Received amount cannot exceed invoice total.',true);
+  const saleRef=doc(collection(db,'sales')); const counterRef=doc(db,'counters','invoice'); const paymentRef=paidNow>0?doc(collection(db,'payments')):null;
+  const productRefs=items.map(i=>doc(db,'products',i.productId));
+  try{
+    const result=await runTransaction(db,async tx=>{
+      const productSnaps=[]; for(const ref of productRefs) productSnaps.push(await tx.get(ref));
+      const counterSnap=await tx.get(counterRef);
+      let next=counterSnap.exists()?Number(counterSnap.data().next||1):1;
+      const invoiceNo=`NG-${String(next).padStart(6,'0')}`;
+      const now=Timestamp.now();
+      productSnaps.forEach((snap,idx)=>{
+        if(!snap.exists()) throw new Error(`Product not found: ${items[idx].name}`);
+        const p=snap.data(), need=Number(items[idx].issuedQty), old=Number(p.stockQty||0); if(old<need) throw new Error(`${p.name}: only ${old} in stock, ${need} required including free quantity.`);
+        tx.update(productRefs[idx],{stockQty:old-need,updatedAt:now});
+        const mref=doc(collection(db,'stockMovements'));
+        tx.set(mref,{productId:items[idx].productId,productName:items[idx].name,movementType:'sale',qtyChange:-need,balanceAfter:old-need,refType:'sale',refId:saleRef.id,notes:`Invoice ${invoiceNo}`,enteredBy:state.user.uid,createdAt:now});
+      });
+      tx.set(counterRef,{next:next+1},{merge:true});
+      const sale={invoiceNo,saleDate:tsFromInput($('#saleDate').value),customerId,salesmanId,items,subtotal:gross,discount,total,paidAmount:paidNow,paymentStatus:calcStatus(total,paidNow),notes:$('#saleNotes').value.trim()||'',createdBy:state.user.uid,createdAt:now,updatedAt:now};
+      tx.set(saleRef,sale);
+      if(paymentRef) tx.set(paymentRef,{saleId:saleRef.id,invoiceNo,customerId,salesmanId,amount:paidNow,method:'cash',reference:'',notes:'Received with sale',paymentDate:now,enteredBy:state.user.uid,createdAt:now});
+      return {invoiceNo};
+    });
+    closeModal(); toast(`Sale saved: ${result.invoiceNo}`);
+  }catch(err){ console.error(err); toast(err.message||'Sale could not be saved.',true); }
+}
 
-  async function loadAll(){
-    if(!sb || !state.session) return;
-    setSync('Syncing cloud data…');
+function openInvoice(id){
+  const s=state.sales.find(x=>x.id===id); if(!s) return;
+  const cust=state.customers.find(x=>x.id===s.customerId); const settings=state.settings||{};
+  showModal(`Invoice ${s.invoiceNo}`,`<div class="invoice" id="invoicePrintable"><h2>${esc(settings.companyName||'Naturegen Distribution')}</h2><p>${esc(settings.address||'')}</p><p>${esc(settings.phone||'')}</p><hr><div class="two-col"><div><b>Invoice:</b> ${esc(s.invoiceNo)}<br><b>Date:</b> ${date(s.saleDate)}<br><b>Salesman:</b> ${esc(profileName(s.salesmanId))}</div><div><b>Customer:</b> ${esc(cust?.shopName||'—')}<br>${esc(cust?.address||'')}<br>${esc(cust?.phone||'')}</div></div><table><thead><tr><th>Product</th><th>Paid Qty</th><th>Free</th><th>Rate</th><th>Total</th></tr></thead><tbody>${(s.items||[]).map(i=>`<tr><td>${esc(i.name)}</td><td>${fmt(i.paidQty)}</td><td>${fmt(i.freeQty)}</td><td>${money(i.unitPrice)}</td><td>${money(i.lineTotal)}</td></tr>`).join('')}</tbody></table><p class="right"><b>Subtotal:</b> ${money(s.subtotal)}<br><b>Discount:</b> ${money(s.discount)}<br><b>Total:</b> ${money(s.total)}<br><b>Paid:</b> ${money(s.paidAmount)}<br><b>Balance:</b> ${money(Number(s.total)-Number(s.paidAmount))}</p></div><div class="actions"><button id="printInvoiceBtn" class="btn primary">Print Invoice</button>${(can('admin','recovery')||can('salesman'))&&Number(s.paidAmount)<Number(s.total)?`<button id="invoiceRecoverBtn" class="btn ghost">Receive Payment</button>`:''}</div>`);
+  $('#printInvoiceBtn').onclick=()=>printInvoiceHtml($('#invoicePrintable').innerHTML);
+  if($('#invoiceRecoverBtn')) $('#invoiceRecoverBtn').onclick=()=>openRecoveryForm(id);
+}
+function printInvoiceHtml(html){ const w=window.open('','_blank','width=900,height=750'); if(!w)return toast('Allow popups to print invoices.',true); w.document.write(`<html><head><title>Invoice</title><style>body{font-family:Arial;padding:28px;color:#111}table{width:100%;border-collapse:collapse;margin:16px 0}th,td{border:1px solid #bbb;padding:8px;text-align:left}.two-col{display:grid;grid-template-columns:1fr 1fr;gap:20px}.right{text-align:right}</style></head><body>${html}<script>window.onload=()=>window.print()<\/script></body></html>`); w.document.close(); }
+
+function renderCustomers(){
+  $('#customersPage').innerHTML=`<div class="section-head"><div><h3>Customers / Pharmacies</h3><div class="muted">${state.customers.length} accessible customer(s)</div></div>${can('admin','salesman')?'<button id="addCustomerBtn" class="btn primary">+ Customer</button>':''}</div><div class="table-wrap"><table class="table"><thead><tr><th>Shop / Pharmacy</th><th>Owner</th><th>Phone</th><th>Route</th><th>Salesman</th><th>Address</th><th></th></tr></thead><tbody>${state.customers.map(c=>`<tr><td><b>${esc(c.shopName)}</b></td><td>${esc(c.ownerName||'')}</td><td>${esc(c.phone||'')}</td><td>${esc(c.routeArea||'')}</td><td>${esc(profileName(c.assignedSalesmanId))}</td><td>${esc(c.address||'')}</td><td>${can('admin')||c.assignedSalesmanId===state.user.uid?`<button class="btn ghost small" data-customer="${c.id}">Edit</button>`:''}</td></tr>`).join('')||'<tr><td colspan="7" class="empty">No customers yet.</td></tr>'}</tbody></table></div>`;
+  if($('#addCustomerBtn')) $('#addCustomerBtn').onclick=()=>openCustomerForm(); $$('[data-customer]').forEach(b=>b.onclick=()=>openCustomerForm(b.dataset.customer));
+}
+function openCustomerForm(id=null){
+  const c=id?state.customers.find(x=>x.id===id):null; const reps=state.users.filter(u=>u.role==='salesman'&&u.active!==false);
+  const assigned=c?.assignedSalesmanId || (can('salesman')?state.user.uid:'');
+  showModal(c?'Edit Customer':'Add Customer',`<form id="customerForm" class="form-grid"><label>Shop / Pharmacy Name<input id="cShop" required value="${esc(c?.shopName||'')}"></label><label>Owner / Contact<input id="cOwner" value="${esc(c?.ownerName||'')}"></label><label>Phone<input id="cPhone" value="${esc(c?.phone||'')}"></label><label>Route / Area<input id="cRoute" value="${esc(c?.routeArea||state.me.routeArea||'')}"></label>${can('admin')?`<label>Assigned Salesman<select id="cSalesman" required><option value="">Select</option>${reps.map(r=>`<option value="${r.id}" ${assigned===r.id?'selected':''}>${esc(r.fullName)}</option>`).join('')}</select></label>`:`<input id="cSalesman" type="hidden" value="${state.user.uid}">`}<label class="full">Address<textarea id="cAddress">${esc(c?.address||'')}</textarea></label><div class="full"><button class="btn primary">Save Customer</button></div></form>`);
+  $('#customerForm').onsubmit=async e=>{ e.preventDefault(); const data={shopName:$('#cShop').value.trim(),ownerName:$('#cOwner').value.trim(),phone:$('#cPhone').value.trim(),routeArea:$('#cRoute').value.trim(),assignedSalesmanId:$('#cSalesman').value,address:$('#cAddress').value.trim(),active:true,updatedAt:serverTimestamp()}; if(!data.assignedSalesmanId)return toast('Select salesman.',true); try{ if(c) await updateDoc(doc(db,'customers',c.id),data); else await addDoc(collection(db,'customers'),{...data,createdBy:state.user.uid,createdAt:serverTimestamp()}); closeModal();toast('Customer saved.'); }catch(err){toast(err.message,true);} };
+}
+
+function renderInventory(){
+  if(!can('admin','inventory')) return;
+  $('#inventoryPage').innerHTML=`<div class="section-head"><div><h3>Inventory</h3><div class="muted">Live stock shared across all users</div></div><button id="stockAdjustBtn" class="btn primary">+ Stock Movement</button></div><div class="table-wrap"><table class="table"><thead><tr><th>SKU</th><th>Product</th><th>Stock</th><th>Low Alert</th><th>MRP</th><th>Sale Price</th><th>Scheme</th><th></th></tr></thead><tbody>${state.products.map(p=>`<tr><td>${esc(p.sku||'')}</td><td><b>${esc(p.name)}</b></td><td>${fmt(p.stockQty)}</td><td>${fmt(p.lowStockThreshold)}</td><td>${money(p.mrp)}</td><td>${money(p.salePrice)}</td><td>${fmt(p.schemeBuy)}+${fmt(p.schemeFree)}</td><td>${can('admin')?`<button class="btn ghost small" data-product-edit="${p.id}">Edit</button>`:''}</td></tr>`).join('')||'<tr><td colspan="8" class="empty">No products. Admin can initialize default data in Settings.</td></tr>'}</tbody></table></div><div class="section-head"><h3>Recent Stock Movements</h3></div><div class="table-wrap"><table class="table"><thead><tr><th>Date</th><th>Product</th><th>Type</th><th>Qty Change</th><th>Balance</th><th>Notes</th></tr></thead><tbody>${state.movements.slice(0,100).map(m=>`<tr><td>${dt(m.createdAt)}</td><td>${esc(m.productName||productName(m.productId))}</td><td>${esc(m.movementType)}</td><td>${fmt(m.qtyChange)}</td><td>${fmt(m.balanceAfter)}</td><td>${esc(m.notes||'')}</td></tr>`).join('')}</tbody></table></div>`;
+  $('#stockAdjustBtn').onclick=openStockForm; $$('[data-product-edit]').forEach(b=>b.onclick=()=>openProductForm(b.dataset.productEdit));
+}
+function openStockForm(){
+  showModal('Stock Movement',`<form id="stockForm" class="form-grid"><label>Product<select id="stProduct" required><option value="">Select</option>${activeProducts().map(p=>`<option value="${p.id}">${esc(p.name)} — Stock ${fmt(p.stockQty)}</option>`).join('')}</select></label><label>Type<select id="stType"><option value="production_received">Production Received</option><option value="purchase_received">Purchase Received</option><option value="sales_return">Sales Return</option><option value="damage">Damage / Breakage</option><option value="adjustment_plus">Adjustment +</option><option value="adjustment_minus">Adjustment -</option></select></label><label>Quantity<input id="stQty" type="number" min="1" step="1" required></label><label class="full">Notes<textarea id="stNotes"></textarea></label><div class="full"><button class="btn primary">Save Movement</button></div></form>`);
+  $('#stockForm').onsubmit=async e=>{e.preventDefault();const productId=$('#stProduct').value,type=$('#stType').value,qty=Math.floor(Number($('#stQty').value||0));if(!productId||qty<=0)return;const negative=['damage','adjustment_minus'].includes(type),delta=negative?-qty:qty,pRef=doc(db,'products',productId),mRef=doc(collection(db,'stockMovements'));try{await runTransaction(db,async tx=>{const ps=await tx.get(pRef);if(!ps.exists())throw new Error('Product not found.');const p=ps.data(),old=Number(p.stockQty||0),bal=old+delta;if(bal<0)throw new Error(`Only ${old} units available.`);tx.update(pRef,{stockQty:bal,updatedAt:Timestamp.now()});tx.set(mRef,{productId,productName:p.name,movementType:type,qtyChange:delta,balanceAfter:bal,refType:'manual',refId:'',notes:$('#stNotes').value.trim(),enteredBy:state.user.uid,createdAt:Timestamp.now()});});closeModal();toast('Stock updated.');}catch(err){toast(err.message,true);}};
+}
+function openProductForm(id){
+  const p=state.products.find(x=>x.id===id); if(!p)return;
+  showModal('Edit Product',`<form id="productForm" class="form-grid"><label>SKU<input id="pSku" value="${esc(p.sku||'')}"></label><label>Name<input id="pName" required value="${esc(p.name)}"></label><label>MRP<input id="pMrp" type="number" min="0" step="0.01" value="${p.mrp||0}"></label><label>Sale Price<input id="pSale" type="number" min="0" step="0.01" value="${p.salePrice||0}"></label><label>Cost Price<input id="pCost" type="number" min="0" step="0.01" value="${p.costPrice||0}"></label><label>Low Stock Alert<input id="pLow" type="number" min="0" step="1" value="${p.lowStockThreshold||0}"></label><label>Scheme Buy<input id="pBuy" type="number" min="0" step="1" value="${p.schemeBuy||0}"></label><label>Scheme Free<input id="pFree" type="number" min="0" step="1" value="${p.schemeFree||0}"></label><label>Active<select id="pActive"><option value="true" ${p.active!==false?'selected':''}>Yes</option><option value="false" ${p.active===false?'selected':''}>No</option></select></label><div class="full"><button class="btn primary">Save Product</button></div></form>`);
+  $('#productForm').onsubmit=async e=>{e.preventDefault();try{await updateDoc(doc(db,'products',id),{sku:$('#pSku').value.trim(),name:$('#pName').value.trim(),mrp:Number($('#pMrp').value||0),salePrice:Number($('#pSale').value||0),costPrice:Number($('#pCost').value||0),lowStockThreshold:Number($('#pLow').value||0),schemeBuy:Number($('#pBuy').value||0),schemeFree:Number($('#pFree').value||0),active:$('#pActive').value==='true',updatedAt:serverTimestamp()});closeModal();toast('Product updated.');}catch(err){toast(err.message,true);}};
+}
+
+function renderRecovery(){
+  const rows=accessibleSales().filter(s=>Number(s.paidAmount||0)<Number(s.total||0));
+  $('#recoveryPage').innerHTML=`<div class="section-head"><div><h3>${can('salesman')?'My Recovery':'Recovery / Outstanding'}</h3><div class="muted">${rows.length} unpaid/partial invoice(s)</div></div></div><div class="table-wrap"><table class="table"><thead><tr><th>Invoice</th><th>Customer</th><th>Salesman</th><th>Total</th><th>Paid</th><th>Balance</th><th></th></tr></thead><tbody>${rows.map(s=>`<tr><td>${esc(s.invoiceNo)}</td><td>${esc(customerName(s.customerId))}</td><td>${esc(profileName(s.salesmanId))}</td><td>${money(s.total)}</td><td>${money(s.paidAmount)}</td><td><b>${money(Number(s.total)-Number(s.paidAmount))}</b></td><td><button class="btn primary small" data-recover="${s.id}">Receive</button></td></tr>`).join('')||'<tr><td colspan="7" class="empty">No outstanding invoices.</td></tr>'}</tbody></table></div><div class="section-head"><h3>Recent Payments</h3></div><div class="table-wrap"><table class="table"><thead><tr><th>Date</th><th>Invoice</th><th>Customer</th><th>Amount</th><th>Method</th><th>Reference</th></tr></thead><tbody>${state.payments.slice(0,100).map(p=>`<tr><td>${dt(p.paymentDate)}</td><td>${esc(p.invoiceNo||'')}</td><td>${esc(customerName(p.customerId))}</td><td>${money(p.amount)}</td><td>${esc(p.method||'')}</td><td>${esc(p.reference||'')}</td></tr>`).join('')}</tbody></table></div>`;
+  $$('[data-recover]').forEach(b=>b.onclick=()=>openRecoveryForm(b.dataset.recover));
+}
+function openRecoveryForm(saleId){
+  const s=state.sales.find(x=>x.id===saleId); if(!s)return; if(can('salesman')&&s.salesmanId!==state.user.uid)return toast('This invoice is not assigned to you.',true);
+  const balance=Number(s.total||0)-Number(s.paidAmount||0);
+  showModal(`Receive Payment — ${s.invoiceNo}`,`<form id="recoveryForm" class="form-grid"><label>Balance<input value="${balance}" disabled></label><label>Amount<input id="rAmount" type="number" min="0.01" max="${balance}" step="0.01" value="${balance}" required></label><label>Method<select id="rMethod"><option value="cash">Cash</option><option value="bank">Bank</option><option value="easypaisa">Easypaisa</option><option value="jazzcash">JazzCash</option><option value="cheque">Cheque</option></select></label><label>Reference<input id="rRef"></label><label class="full">Notes<textarea id="rNotes"></textarea></label><div class="full"><button class="btn primary">Save Recovery</button></div></form>`);
+  $('#recoveryForm').onsubmit=async e=>{e.preventDefault();const amt=Number($('#rAmount').value||0);if(amt<=0||amt>balance+0.001)return toast('Invalid amount.',true);const sRef=doc(db,'sales',saleId),pRef=doc(collection(db,'payments'));try{await runTransaction(db,async tx=>{const snap=await tx.get(sRef);if(!snap.exists())throw new Error('Invoice not found.');const cur=snap.data(),newPaid=Number(cur.paidAmount||0)+amt;if(newPaid>Number(cur.total||0)+0.001)throw new Error('Payment exceeds current balance.');const now=Timestamp.now();tx.update(sRef,{paidAmount:newPaid,paymentStatus:calcStatus(cur.total,newPaid),updatedAt:now});tx.set(pRef,{saleId,invoiceNo:cur.invoiceNo,customerId:cur.customerId,salesmanId:cur.salesmanId,amount:amt,method:$('#rMethod').value,reference:$('#rRef').value.trim(),notes:$('#rNotes').value.trim(),paymentDate:now,enteredBy:state.user.uid,createdAt:now});});closeModal();toast('Payment recorded.');}catch(err){toast(err.message,true);}};
+}
+
+function renderExpenses(){
+  if(!can('admin'))return;
+  const total=state.expenses.reduce((a,e)=>a+Number(e.amount||0),0);
+  $('#expensesPage').innerHTML=`<div class="section-head"><div><h3>Expenses</h3><div class="muted">Loaded total ${money(total)}</div></div><button id="addExpenseBtn" class="btn primary">+ Expense</button></div><div class="table-wrap"><table class="table"><thead><tr><th>Date</th><th>Category</th><th>Description</th><th>Amount</th></tr></thead><tbody>${state.expenses.map(e=>`<tr><td>${date(e.expenseDate)}</td><td>${esc(e.category)}</td><td>${esc(e.description||'')}</td><td>${money(e.amount)}</td></tr>`).join('')||'<tr><td colspan="4" class="empty">No expenses yet.</td></tr>'}</tbody></table></div>`;
+  $('#addExpenseBtn').onclick=()=>{showModal('Add Expense',`<form id="expenseForm" class="form-grid"><label>Date<input id="eDate" type="date" value="${todayISO()}"></label><label>Category<select id="eCat"><option>Salary</option><option>Petrol/Transport</option><option>Marketing</option><option>Office</option><option>Recovery Incentive</option><option>Other</option></select></label><label>Amount<input id="eAmount" type="number" min="0.01" step="0.01" required></label><label class="full">Description<textarea id="eDesc"></textarea></label><div class="full"><button class="btn primary">Save Expense</button></div></form>`);$('#expenseForm').onsubmit=async e=>{e.preventDefault();try{await addDoc(collection(db,'expenses'),{expenseDate:tsFromInput($('#eDate').value),category:$('#eCat').value,description:$('#eDesc').value.trim(),amount:Number($('#eAmount').value),enteredBy:state.user.uid,createdAt:serverTimestamp()});closeModal();toast('Expense saved.');}catch(err){toast(err.message,true);}};};
+}
+
+function renderReports(){
+  if(!can('admin'))return;
+  const start=monthStart(), sales=state.sales.filter(s=>(asDate(s.saleDate)||new Date(0))>=start), rev=sales.reduce((a,s)=>a+Number(s.total||0),0), collected=sales.reduce((a,s)=>a+Number(s.paidAmount||0),0), expenses=state.expenses.filter(e=>(asDate(e.expenseDate)||new Date(0))>=start).reduce((a,e)=>a+Number(e.amount||0),0);
+  const cogs=sales.reduce((sum,s)=>sum+(s.items||[]).reduce((a,i)=>a+Number(i.costPrice||0)*Number(i.issuedQty||0),0),0);
+  $('#reportsPage').innerHTML=`<div class="grid cards"><div class="card stat"><small>Monthly Sales</small><strong>${money(rev)}</strong></div><div class="card stat"><small>Monthly Collection</small><strong>${money(collected)}</strong></div><div class="card stat"><small>Estimated COGS</small><strong>${money(cogs)}</strong><div class="sub">Includes paid + free units at saved cost</div></div><div class="card stat"><small>Monthly Expenses</small><strong>${money(expenses)}</strong></div></div><div class="section-head"><h3>Salesman Summary</h3><div class="actions"><button id="reportCsvBtn" class="btn ghost">Export Sales CSV</button><button id="backupBtn" class="btn ghost">Export JSON Backup</button></div></div>${salesmanSummaryTable(sales)}`;
+  $('#reportCsvBtn').onclick=exportSales; $('#backupBtn').onclick=exportBackup;
+}
+function salesmanSummaryTable(sales){ const reps=state.users.filter(p=>p.role==='salesman'); return `<div class="table-wrap"><table class="table"><thead><tr><th>Salesman</th><th>Route</th><th>Invoices</th><th>Sales</th><th>Collected</th><th>Outstanding</th><th>Target</th><th>%</th></tr></thead><tbody>${reps.map(p=>{const ss=sales.filter(s=>s.salesmanId===p.id),v=ss.reduce((a,s)=>a+Number(s.total||0),0),c=ss.reduce((a,s)=>a+Number(s.paidAmount||0),0),pct=Number(p.monthlyTarget||0)>0?v/Number(p.monthlyTarget)*100:0;return `<tr><td>${esc(p.fullName)}</td><td>${esc(p.routeArea||'')}</td><td>${ss.length}</td><td>${money(v)}</td><td>${money(c)}</td><td>${money(v-c)}</td><td>${money(p.monthlyTarget)}</td><td>${pct.toFixed(1)}%</td></tr>`}).join('')||'<tr><td colspan="8" class="empty">No salesmen.</td></tr>'}</tbody></table></div>`; }
+function exportSales(){ const rows=[['Invoice','Date','Customer','Salesman','Total','Paid','Balance','Status'],...state.sales.map(s=>[s.invoiceNo,asDate(s.saleDate)?.toISOString()||'',customerName(s.customerId),profileName(s.salesmanId),s.total,s.paidAmount,Number(s.total)-Number(s.paidAmount),s.paymentStatus])]; const csv=rows.map(r=>r.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\n'); downloadBlob(csv,`naturegen-sales-${todayISO()}.csv`,'text/csv'); }
+function exportBackup(){ const clean=(v)=>JSON.parse(JSON.stringify(v,(k,val)=>val?.toDate?val.toDate().toISOString():val)); const data=clean({exportedAt:new Date().toISOString(),settings:state.settings,users:state.users,products:state.products,customers:state.customers,sales:state.sales,payments:state.payments,expenses:state.expenses,stockMovements:state.movements}); downloadBlob(JSON.stringify(data,null,2),`naturegen-backup-${todayISO()}.json`,'application/json'); }
+function downloadBlob(content,name,type){ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([content],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),5000); }
+
+function renderUsers(){
+  if(!can('admin'))return;
+  $('#usersPage').innerHTML=`<div class="section-head"><div><h3>Users & Roles</h3><div class="muted">Create Salesman, Inventory and Recovery logins from here.</div></div><button id="createUserBtn" class="btn primary">+ Create User Login</button></div><div class="table-wrap"><table class="table"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Phone</th><th>Route</th><th>Monthly Target</th><th>Active</th><th></th></tr></thead><tbody>${state.users.map(p=>`<tr><td><b>${esc(p.fullName)}</b></td><td>${esc(p.email||'')}</td><td><span class="badge role-pill">${esc(p.role)}</span></td><td>${esc(p.phone||'')}</td><td>${esc(p.routeArea||'')}</td><td>${money(p.monthlyTarget)}</td><td>${p.active!==false?'Yes':'No'}</td><td><button class="btn ghost small" data-user="${p.id}">Edit</button></td></tr>`).join('')}</tbody></table></div>`;
+  $('#createUserBtn').onclick=openCreateUserForm; $$('[data-user]').forEach(b=>b.onclick=()=>openUserForm(b.dataset.user));
+}
+function openCreateUserForm(){
+  showModal('Create Staff Login',`<form id="createUserForm" class="form-grid"><label>Full Name<input id="nuName" required></label><label>Email<input id="nuEmail" type="email" required></label><label>Temporary Password<input id="nuPassword" type="password" minlength="6" required></label><label>Role<select id="nuRole"><option value="salesman">Salesman</option><option value="inventory">Inventory / Store</option><option value="recovery">Recovery</option><option value="admin">Admin</option></select></label><label>Phone<input id="nuPhone"></label><label>Route / Area<input id="nuRoute"></label><label>Monthly Target<input id="nuTarget" type="number" min="0" step="0.01" value="0"></label><div class="full help">The user can later use “Forgot password?” on the login screen to set a private password.</div><div class="full"><button class="btn primary">Create Login</button></div></form>`);
+  $('#createUserForm').onsubmit=async e=>{e.preventDefault();let secondary=null;try{secondary=initializeApp(C,`staff-${Date.now()}`);const a=getAuth(secondary);const cred=await createUserWithEmailAndPassword(a,$('#nuEmail').value.trim(),$('#nuPassword').value);await setDoc(doc(db,'users',cred.user.uid),{fullName:$('#nuName').value.trim(),email:$('#nuEmail').value.trim().toLowerCase(),role:$('#nuRole').value,phone:$('#nuPhone').value.trim(),routeArea:$('#nuRoute').value.trim(),monthlyTarget:Number($('#nuTarget').value||0),active:true,createdAt:serverTimestamp(),createdBy:state.user.uid,updatedAt:serverTimestamp()});await signOut(a);await deleteApp(secondary);secondary=null;closeModal();toast('Staff login created.');}catch(err){console.error(err);if(secondary)try{await deleteApp(secondary);}catch{}toast(err.message,true);}};
+}
+function openUserForm(id){
+  const p=state.users.find(x=>x.id===id); if(!p)return;
+  showModal('Edit User Role',`<form id="userForm" class="form-grid"><label>Full Name<input id="uName" value="${esc(p.fullName||'')}"></label><label>Email<input value="${esc(p.email||'')}" disabled></label><label>Phone<input id="uPhone" value="${esc(p.phone||'')}"></label><label>Role<select id="uRole">${['admin','inventory','salesman','recovery'].map(r=>`<option value="${r}" ${p.role===r?'selected':''}>${r}</option>`).join('')}</select></label><label>Route / Area<input id="uRoute" value="${esc(p.routeArea||'')}"></label><label>Monthly Target<input id="uTarget" type="number" min="0" step="0.01" value="${p.monthlyTarget||0}"></label><label>Active<select id="uActive"><option value="true" ${p.active!==false?'selected':''}>Yes</option><option value="false" ${p.active===false?'selected':''}>No</option></select></label><div class="full"><button class="btn primary">Save User</button></div></form>`);
+  $('#userForm').onsubmit=async e=>{e.preventDefault();if(id===state.user.uid&&$('#uActive').value==='false')return toast('You cannot deactivate your own admin access.',true);try{await updateDoc(doc(db,'users',id),{fullName:$('#uName').value.trim(),phone:$('#uPhone').value.trim(),role:$('#uRole').value,routeArea:$('#uRoute').value.trim(),monthlyTarget:Number($('#uTarget').value||0),active:$('#uActive').value==='true',updatedAt:serverTimestamp()});closeModal();toast('User updated.');}catch(err){toast(err.message,true);}};
+}
+
+function renderSettings(){
+  if(!can('admin'))return;
+  const s=state.settings||{}, needsSetup=state.products.length===0;
+  $('#settingsPage').innerHTML=`${needsSetup?`<div class="card setup-card"><h3>Initial Business Setup</h3><p>Products are empty. Create Naturegen's starting products and stock with one click.</p><button id="seedBtn" class="btn primary">Initialize Aimacid + Iron Data</button></div>`:''}<div class="card" style="max-width:760px;margin-top:16px"><h3>Company Settings</h3><form id="settingsForm" class="form-grid"><label>Company Name<input id="setName" value="${esc(s.companyName||'Naturegen Distribution')}"></label><label>Phone<input id="setPhone" value="${esc(s.phone||'')}"></label><label class="full">Address<textarea id="setAddress">${esc(s.address||'')}</textarea></label><label>Monthly Profit Target<input id="setTarget" type="number" min="0" step="0.01" value="${s.monthlyProfitTarget||100000}"></label><div class="full"><button class="btn primary">Save Settings</button></div></form></div>`;
+  if($('#seedBtn')) $('#seedBtn').onclick=seedInitialData;
+  $('#settingsForm').onsubmit=async e=>{e.preventDefault();try{await setDoc(doc(db,'settings','company'),{companyName:$('#setName').value.trim(),phone:$('#setPhone').value.trim(),address:$('#setAddress').value.trim(),monthlyProfitTarget:Number($('#setTarget').value||0),updatedAt:serverTimestamp()},{merge:true});toast('Settings saved.');}catch(err){toast(err.message,true);}};
+}
+async function seedInitialData(){
+  if(!can('admin'))return;
+  if(state.products.length) return toast('Products already exist; setup was not repeated.',true);
+  const batch=writeBatch(db), now=serverTimestamp();
+  const p1=doc(collection(db,'products')),p2=doc(collection(db,'products'));
+  batch.set(p1,{sku:'AIMACID-120',name:'Aimacid Syrup 120 ml',mrp:190,salePrice:65,costPrice:35,stockQty:10400,lowStockThreshold:500,schemeBuy:10,schemeFree:1,active:true,createdAt:now,updatedAt:now});
+  batch.set(p2,{sku:'IRON-120',name:'Iron Syrup 120 ml',mrp:0,salePrice:90,costPrice:35,stockQty:2600,lowStockThreshold:200,schemeBuy:10,schemeFree:1,active:true,createdAt:now,updatedAt:now});
+  batch.set(doc(db,'counters','invoice'),{next:1},{merge:true});
+  batch.set(doc(db,'settings','company'),{companyName:'Naturegen Distribution',monthlyProfitTarget:100000,updatedAt:now},{merge:true});
+  const m1=doc(collection(db,'stockMovements')),m2=doc(collection(db,'stockMovements'));
+  batch.set(m1,{productId:p1.id,productName:'Aimacid Syrup 120 ml',movementType:'opening',qtyChange:10400,balanceAfter:10400,refType:'opening',refId:'',notes:'Initial opening stock',enteredBy:state.user.uid,createdAt:now});
+  batch.set(m2,{productId:p2.id,productName:'Iron Syrup 120 ml',movementType:'opening',qtyChange:2600,balanceAfter:2600,refType:'opening',refId:'',notes:'Initial opening stock',enteredBy:state.user.uid,createdAt:now});
+  try{await batch.commit();toast('Initial Naturegen data created.');}catch(err){toast(err.message,true);}
+}
+
+async function init(){
+  if(!configured){ $('#configWarning').classList.remove('hidden'); return; }
+  onAuthStateChanged(auth,async user=>{
+    clearListeners(); state.user=user; state.me=null;
+    if(!user){ showLogin(); return; }
     try{
-      const meRes=await sb.from('profiles').select('*').eq('id',state.session.user.id).single();
-      if(meRes.error) throw meRes.error; state.me=meRes.data;
-      const core=await Promise.all([
-        query('products',{order:{col:'name',asc:true}}), query('customers',{order:{col:'shop_name',asc:true}}), query('profiles',{order:{col:'full_name',asc:true}}),
-        query('sales',{order:{col:'sale_date',asc:false},limit:1000}), query('payments',{order:{col:'payment_date',asc:false},limit:1500}), query('app_settings',{limit:1})
-      ]);
-      [state.products,state.customers,state.profiles,state.sales,state.payments]=core;
-      state.settings=core[5][0]||null;
-      if(can('admin')) state.expenses=await query('expenses',{order:{col:'expense_date',asc:false},limit:1000});
-      if(can('admin','inventory')) state.movements=await query('stock_movements',{order:{col:'created_at',asc:false},limit:1000});
-      $('#userName').textContent=state.me.full_name||state.session.user.email;
-      $('#userRole').textContent=state.me.role;
-      renderNav(); renderPage(); setSync(`Live • ${new Date().toLocaleTimeString('en-PK')}`);
-      subscribeRealtime();
-    }catch(e){ console.error(e); toast(e.message||'Could not load cloud data',true); setSync('Sync error'); }
-  }
+      const me=await loadProfile(user);
+      if(!me){ $('#accessWarning').classList.remove('hidden'); await signOut(auth); return; }
+      $('#accessWarning').classList.add('hidden'); state.me=me; $('#userName').textContent=me.fullName||user.email; $('#userRole').textContent=me.role; showApp(); renderNav(); go('dashboard'); setSync('Connecting live data…'); await startLiveData();
+    }catch(err){console.error(err);toast(err.message,true);await signOut(auth);}
+  });
+}
 
-  function subscribeRealtime(){
-    if(state.channel) return;
-    state.channel=sb.channel('naturegen-live')
-      .on('postgres_changes',{event:'*',schema:'public',table:'products'},()=>debouncedReload())
-      .on('postgres_changes',{event:'*',schema:'public',table:'sales'},()=>debouncedReload())
-      .on('postgres_changes',{event:'*',schema:'public',table:'payments'},()=>debouncedReload())
-      .on('postgres_changes',{event:'*',schema:'public',table:'customers'},()=>debouncedReload())
-      .subscribe(s=>setSync(s==='SUBSCRIBED'?'Live connected':`Realtime: ${s}`));
-  }
-  let reloadTimer; function debouncedReload(){ clearTimeout(reloadTimer); reloadTimer=setTimeout(loadAll,500); }
+$('#loginForm').onsubmit=async e=>{e.preventDefault();if(!configured)return toast('Connect Firebase in config.js first.',true);try{await signInWithEmailAndPassword(auth,$('#loginEmail').value.trim(),$('#loginPassword').value);}catch(err){toast('Login failed: '+err.message,true);}};
+$('#forgotPasswordBtn').onclick=async()=>{if(!configured)return;const email=$('#loginEmail').value.trim();if(!email)return toast('Enter your email first.',true);try{await sendPasswordResetEmail(auth,email);toast('Password reset email sent.');}catch(err){toast(err.message,true);}};
+$('#logoutBtn').onclick=async()=>{clearListeners();await signOut(auth);};
+$('#refreshBtn').onclick=()=>{ if(state.user&&state.me){ setSync('Refreshing live listeners…'); startLiveData(); } };
+$('#modalClose').onclick=closeModal; $('#modal').addEventListener('click',e=>{if(e.target===$('#modal'))closeModal();});
 
-  function renderDashboard(){
-    const start=monthStart(); const sales=state.sales.filter(s=>new Date(s.sale_date)>=start);
-    const total=sales.reduce((a,s)=>a+Number(s.total),0); const collected=sales.reduce((a,s)=>a+Number(s.paid_amount),0);
-    const outstanding=state.sales.reduce((a,s)=>a+Math.max(0,Number(s.total)-Number(s.paid_amount)),0);
-    const stock=state.products.reduce((a,p)=>a+Number(p.stock_qty),0);
-    const low=state.products.filter(p=>p.active && p.stock_qty<=p.low_stock_threshold);
-    const page=$('#dashboardPage');
-    let perf='';
-    if(can('admin')){
-      const reps=state.profiles.filter(p=>p.role==='salesman'&&p.active);
-      perf=`<div class="section-head"><h3>Salesman Performance — This Month</h3></div><div class="table-wrap"><table class="table"><thead><tr><th>Salesman</th><th>Route</th><th>Invoices</th><th>Sales</th><th>Recovery</th><th>Outstanding</th><th>Target</th><th>Achievement</th></tr></thead><tbody>${reps.map(p=>{
-        const ss=sales.filter(s=>s.salesman_id===p.id), st=ss.reduce((a,s)=>a+Number(s.total),0), rec=ss.reduce((a,s)=>a+Number(s.paid_amount),0), out=ss.reduce((a,s)=>a+Number(s.total)-Number(s.paid_amount),0), pct=p.monthly_target>0?Math.min(100,st/Number(p.monthly_target)*100):0;
-        return `<tr><td><b>${esc(p.full_name)}</b></td><td>${esc(p.route_area||'—')}</td><td>${ss.length}</td><td>${money(st)}</td><td>${money(rec)}</td><td>${money(out)}</td><td>${money(p.monthly_target)}</td><td><div>${pct.toFixed(1)}%</div><div class="progress"><span style="width:${pct}%"></span></div></td></tr>`;
-      }).join('')||'<tr><td colspan="8" class="empty">No salesman users yet.</td></tr>'}</tbody></table></div>`;
-    }
-    page.innerHTML=`
-      <div class="grid cards">
-        <div class="card stat"><small>${can('salesman')?'My ':''}Sales This Month</small><strong>${money(total)}</strong><div class="sub">${sales.length} invoice(s)</div></div>
-        <div class="card stat"><small>Collected This Month</small><strong>${money(collected)}</strong><div class="sub">From accessible invoices</div></div>
-        <div class="card stat"><small>Outstanding</small><strong>${money(outstanding)}</strong><div class="sub">Current receivables</div></div>
-        <div class="card stat"><small>Total Stock Units</small><strong>${fmt(stock)}</strong><div class="sub">${low.length} low-stock product(s)</div></div>
-      </div>
-      ${low.length?`<div class="section-head"><h3>Low Stock Alerts</h3></div><div class="grid">${low.map(p=>`<div class="card"><b>${esc(p.name)}</b><div class="kpi-line"><span>Available</span><strong>${fmt(p.stock_qty)}</strong></div><div class="kpi-line"><span>Alert level</span><span>${fmt(p.low_stock_threshold)}</span></div></div>`).join('')}</div>`:''}
-      ${perf}
-      <div class="section-head"><h3>Recent Invoices</h3></div>${salesTable(state.sales.slice(0,8),false)}
-    `;
-  }
-
-  function salesTable(rows,actions=true){
-    return `<div class="table-wrap"><table class="table"><thead><tr><th>Invoice</th><th>Date</th><th>Customer</th><th>Salesman</th><th>Total</th><th>Paid</th><th>Balance</th><th>Status</th>${actions?'<th></th>':''}</tr></thead><tbody>${rows.map(s=>`<tr><td><b>${esc(s.invoice_no)}</b></td><td>${date(s.sale_date)}</td><td>${esc(customerName(s.customer_id))}</td><td>${esc(profileName(s.salesman_id))}</td><td>${money(s.total)}</td><td>${money(s.paid_amount)}</td><td>${money(Number(s.total)-Number(s.paid_amount))}</td><td>${badgeStatus(s.payment_status)}</td>${actions?`<td><button class="btn ghost small" data-invoice="${s.id}">View</button></td>`:''}</tr>`).join('')||`<tr><td colspan="${actions?9:8}" class="empty">No invoices found.</td></tr>`}</tbody></table></div>`;
-  }
-
-  function renderSales(){
-    const page=$('#salesPage');
-    page.innerHTML=`<div class="section-head"><div><h3>Sales & Invoices</h3><div class="muted">Live cloud invoices</div></div><div class="actions">${can('admin','salesman')?'<button id="newSaleBtn" class="btn primary">+ New Sale</button>':''}<button id="salesCsvBtn" class="btn ghost">Export CSV</button></div></div>
-    <div class="filters"><input id="salesSearch" placeholder="Search invoice/customer"><select id="salesStatus"><option value="">All status</option><option>unpaid</option><option>partial</option><option>paid</option></select>${can('admin','inventory','recovery')?`<select id="salesRep"><option value="">All salesmen</option>${state.profiles.filter(p=>['salesman','admin'].includes(p.role)).map(p=>`<option value="${p.id}">${esc(p.full_name)}</option>`).join('')}</select>`:''}</div><div id="salesTableBox" style="margin-top:10px">${salesTable(state.sales)}</div>`;
-    $('#newSaleBtn')?.addEventListener('click',openSaleForm); $('#salesCsvBtn').onclick=exportSales;
-    ['#salesSearch','#salesStatus','#salesRep'].forEach(sel=>$(sel)?.addEventListener('input',filterSales)); bindInvoiceButtons();
-  }
-  function filterSales(){ const q=($('#salesSearch')?.value||'').toLowerCase(), st=$('#salesStatus')?.value||'', rep=$('#salesRep')?.value||''; const rows=state.sales.filter(s=>(!st||s.payment_status===st)&&(!rep||s.salesman_id===rep)&&(!q||s.invoice_no.toLowerCase().includes(q)||customerName(s.customer_id).toLowerCase().includes(q))); $('#salesTableBox').innerHTML=salesTable(rows); bindInvoiceButtons(); }
-  function bindInvoiceButtons(){ $$('[data-invoice]').forEach(b=>b.onclick=()=>viewInvoice(b.dataset.invoice)); }
-
-  function openSaleForm(){
-    if(!state.products.filter(p=>p.active).length||!state.customers.filter(c=>c.active).length){ toast('Add at least one active product and customer first.',true); return; }
-    showModal('New Sale / Invoice',`<form id="saleForm" class="stack"><div class="form-grid">
-      <label>Customer<select id="saleCustomer" required>${state.customers.filter(c=>c.active).map(c=>`<option value="${c.id}">${esc(c.shop_name)} — ${esc(c.area||'')}</option>`).join('')}</select></label>
-      ${can('admin')?`<label>Salesman<select id="saleSalesman">${state.profiles.filter(p=>p.active&&['salesman','admin'].includes(p.role)).map(p=>`<option value="${p.id}">${esc(p.full_name)}</option>`).join('')}</select></label>`:`<label>Salesman<input value="${esc(state.me.full_name)}" disabled></label>`}
-      <label>Discount (Rs.)<input id="saleDiscount" type="number" min="0" step="0.01" value="0"></label>
-      <label>Initial Payment (Rs.)<input id="salePaid" type="number" min="0" step="0.01" value="0"></label>
-      <label>Payment Method<select id="saleMethod"><option>cash</option><option>bank</option><option>easypaisa</option><option>jazzcash</option><option>cheque</option></select></label>
-      <label class="full">Notes<textarea id="saleNotes"></textarea></label>
-    </div><div class="section-head"><h3>Items</h3><button type="button" id="addSaleRow" class="btn ghost small">+ Add Item</button></div><div id="saleRows"></div><div id="salePreview" class="card"></div><button class="btn primary" type="submit">Save Sale & Deduct Stock</button></form>`);
-    const add=()=>{ const div=document.createElement('div'); div.className='form-grid sale-row'; div.style.marginBottom='10px'; div.innerHTML=`<label>Product<select class="sr-product">${state.products.filter(p=>p.active).map(p=>`<option value="${p.id}">${esc(p.name)} | Stock ${p.stock_qty}</option>`).join('')}</select></label><label>Paid Qty<input class="sr-qty" type="number" min="1" value="10"></label><label>Unit Price<input class="sr-price" type="number" min="0" step="0.01"></label><label>&nbsp;<button type="button" class="btn danger sr-remove">Remove</button></label>`; $('#saleRows').appendChild(div); const p=state.products.find(x=>x.id===div.querySelector('.sr-product').value); div.querySelector('.sr-price').value=p?.sale_price||0; div.querySelector('.sr-product').onchange=e=>{div.querySelector('.sr-price').value=state.products.find(x=>x.id===e.target.value)?.sale_price||0; preview();}; div.querySelector('.sr-remove').onclick=()=>{div.remove();preview();}; div.querySelectorAll('input').forEach(i=>i.oninput=preview); preview(); };
-    const preview=()=>{ let sub=0, free=0, units=0; $$('.sale-row').forEach(r=>{const p=state.products.find(x=>x.id===r.querySelector('.sr-product').value), q=Number(r.querySelector('.sr-qty').value||0), pr=Number(r.querySelector('.sr-price').value||0), f=p&&p.scheme_buy>0?Math.floor(q/p.scheme_buy)*p.scheme_free:0; sub+=q*pr;free+=f;units+=q;}); const dis=Number($('#saleDiscount').value||0); $('#salePreview').innerHTML=`<div class="kpi-line"><span>Paid units</span><b>${units}</b></div><div class="kpi-line"><span>Free scheme units</span><b>${free}</b></div><div class="kpi-line"><span>Invoice total</span><b>${money(Math.max(0,sub-dis))}</b></div>`; };
-    $('#addSaleRow').onclick=add; $('#saleDiscount').oninput=preview; add();
-    $('#saleForm').onsubmit=async e=>{e.preventDefault(); const items=$$('.sale-row').map(r=>({product_id:r.querySelector('.sr-product').value,qty:Number(r.querySelector('.sr-qty').value),unit_price:Number(r.querySelector('.sr-price').value)})); if(!items.length){toast('Add at least one item.',true);return;} try{ const {data,error}=await sb.rpc('create_sale',{p_customer_id:$('#saleCustomer').value,p_items:items,p_discount:Number($('#saleDiscount').value||0),p_initial_payment:Number($('#salePaid').value||0),p_payment_method:$('#saleMethod').value,p_notes:$('#saleNotes').value||null,p_salesman_id:can('admin')?$('#saleSalesman').value:null}); if(error) throw error; closeModal(); toast(`Invoice ${data?.[0]?.invoice_no||''} saved.`); await loadAll(); }catch(err){toast(err.message,true);} };
-  }
-
-  async function viewInvoice(id){
-    const s=state.sales.find(x=>x.id===id); if(!s)return;
-    const {data:items,error}=await sb.from('sale_items').select('*').eq('sale_id',id); if(error){toast(error.message,true);return;}
-    const c=state.customers.find(x=>x.id===s.customer_id)||{};
-    const html=`<div id="invoiceView" class="invoice"><h2>${esc(state.settings?.company_name||'Naturegen Distribution')}</h2><p>${esc(state.settings?.address||'')}</p><p>${esc(state.settings?.phone||'')}</p><hr><div class="two-col"><div><b>Invoice:</b> ${esc(s.invoice_no)}<br><b>Date:</b> ${dt(s.sale_date)}<br><b>Salesman:</b> ${esc(profileName(s.salesman_id))}</div><div><b>Customer:</b> ${esc(c.shop_name||'')}<br><b>Owner:</b> ${esc(c.owner_name||'')}<br><b>Area:</b> ${esc(c.area||'')}<br><b>Phone:</b> ${esc(c.phone||'')}</div></div><table><thead><tr><th>Product</th><th>Paid Qty</th><th>Free</th><th>Price</th><th>Total</th></tr></thead><tbody>${(items||[]).map(i=>`<tr><td>${esc(productName(i.product_id))}</td><td>${i.qty_paid}</td><td>${i.qty_free}</td><td>${money(i.unit_price)}</td><td>${money(i.line_total)}</td></tr>`).join('')}</tbody></table><div style="margin-left:auto;width:280px;margin-top:14px"><div class="kpi-line"><span>Subtotal</span><b>${money(s.subtotal)}</b></div><div class="kpi-line"><span>Discount</span><b>${money(s.discount)}</b></div><div class="kpi-line"><span>Total</span><b>${money(s.total)}</b></div><div class="kpi-line"><span>Paid</span><b>${money(s.paid_amount)}</b></div><div class="kpi-line"><span>Balance</span><b>${money(Number(s.total)-Number(s.paid_amount))}</b></div></div></div><div class="actions" style="margin-top:16px"><button id="printInvoiceBtn" class="btn primary">Print Invoice</button>${Number(s.total)>Number(s.paid_amount)&&can('admin','recovery','salesman')?'<button id="recoverFromInvoiceBtn" class="btn ghost">Record Payment</button>':''}</div>`;
-    showModal(`Invoice ${s.invoice_no}`,html); $('#printInvoiceBtn').onclick=()=>printInvoice($('#invoiceView').innerHTML); $('#recoverFromInvoiceBtn')?.addEventListener('click',()=>openRecoveryForm(s.id));
-  }
-  function printInvoice(content){ const w=window.open('','_blank'); w.document.write(`<html><head><title>Invoice</title><style>body{font-family:Arial;padding:25px;color:#111}table{width:100%;border-collapse:collapse;margin-top:15px}th,td{border:1px solid #bbb;padding:7px}.two-col{display:grid;grid-template-columns:1fr 1fr}.kpi-line{display:flex;justify-content:space-between;margin:5px}</style></head><body>${content}</body></html>`); w.document.close(); w.focus(); w.print(); }
-
-  function renderCustomers(){
-    const page=$('#customersPage'); const rows=state.customers.filter(c=>!can('salesman')||c.assigned_salesman===state.me.id);
-    page.innerHTML=`<div class="section-head"><div><h3>Customers / Pharmacies</h3><div class="muted">${rows.length} customer(s)</div></div>${can('admin','salesman')?'<button id="newCustomerBtn" class="btn primary">+ Add Customer</button>':''}</div><div class="table-wrap"><table class="table"><thead><tr><th>Shop</th><th>Owner</th><th>Phone</th><th>Area</th><th>Salesman</th><th>Credit Limit</th></tr></thead><tbody>${rows.map(c=>`<tr><td><b>${esc(c.shop_name)}</b></td><td>${esc(c.owner_name||'—')}</td><td>${esc(c.phone||'—')}</td><td>${esc(c.area||'—')}</td><td>${esc(profileName(c.assigned_salesman))}</td><td>${money(c.credit_limit)}</td></tr>`).join('')||'<tr><td colspan="6" class="empty">No customers yet.</td></tr>'}</tbody></table></div>`;
-    $('#newCustomerBtn')?.addEventListener('click',openCustomerForm);
-  }
-  function openCustomerForm(){ showModal('Add Customer / Pharmacy',`<form id="customerForm" class="form-grid"><label>Shop / Pharmacy Name<input id="cShop" required></label><label>Owner Name<input id="cOwner"></label><label>Phone<input id="cPhone"></label><label>Area / Route<input id="cArea"></label><label class="full">Address<textarea id="cAddress"></textarea></label><label>Credit Limit<input id="cLimit" type="number" min="0" value="0"></label>${can('admin')?`<label>Assigned Salesman<select id="cRep"><option value="">Unassigned</option>${state.profiles.filter(p=>p.active&&p.role==='salesman').map(p=>`<option value="${p.id}">${esc(p.full_name)}</option>`).join('')}</select></label>`:''}<div class="full"><button class="btn primary" type="submit">Save Customer</button></div></form>`); $('#customerForm').onsubmit=async e=>{e.preventDefault(); const payload={shop_name:$('#cShop').value,owner_name:$('#cOwner').value||null,phone:$('#cPhone').value||null,area:$('#cArea').value||null,address:$('#cAddress').value||null,credit_limit:Number($('#cLimit').value||0),assigned_salesman:can('admin')?($('#cRep').value||null):state.me.id,created_by:state.me.id}; const {error}=await sb.from('customers').insert(payload); if(error)return toast(error.message,true); closeModal();toast('Customer added.');loadAll();}; }
-
-  function renderInventory(){
-    const page=$('#inventoryPage');
-    page.innerHTML=`<div class="section-head"><div><h3>Products & Live Stock</h3><div class="muted">Stock is shared across all computers</div></div><div class="actions">${can('admin')?'<button id="addProductBtn" class="btn ghost">+ Product</button>':''}${can('admin','inventory')?'<button id="stockBtn" class="btn primary">Stock In / Adjustment</button>':''}</div></div><div class="table-wrap"><table class="table"><thead><tr><th>SKU</th><th>Product</th><th>Stock</th><th>Sale Price</th><th>Cost</th><th>MRP</th><th>Scheme</th><th>Alert</th></tr></thead><tbody>${state.products.map(p=>`<tr><td>${esc(p.sku)}</td><td><b>${esc(p.name)}</b></td><td><span class="badge ${p.stock_qty<=p.low_stock_threshold?'danger':'ok'}">${fmt(p.stock_qty)}</span></td><td>${money(p.sale_price)}</td><td>${money(p.cost_price)}</td><td>${money(p.mrp)}</td><td>${p.scheme_buy}+${p.scheme_free}</td><td>${fmt(p.low_stock_threshold)}</td></tr>`).join('')}</tbody></table></div>${can('admin','inventory')?`<div class="section-head"><h3>Recent Stock Movements</h3></div><div class="table-wrap"><table class="table"><thead><tr><th>Date</th><th>Product</th><th>Type</th><th>Change</th><th>Balance</th><th>Notes</th></tr></thead><tbody>${state.movements.slice(0,30).map(m=>`<tr><td>${dt(m.created_at)}</td><td>${esc(productName(m.product_id))}</td><td>${esc(m.movement_type)}</td><td>${m.qty_change>0?'+':''}${m.qty_change}</td><td>${m.balance_after}</td><td>${esc(m.notes||'')}</td></tr>`).join('')}</tbody></table></div>`:''}`;
-    $('#stockBtn')?.addEventListener('click',openStockForm); $('#addProductBtn')?.addEventListener('click',openProductForm);
-  }
-  function openStockForm(){ showModal('Stock In / Adjustment',`<form id="stockForm" class="form-grid"><label>Product<select id="stProduct">${state.products.map(p=>`<option value="${p.id}">${esc(p.name)} — current ${p.stock_qty}</option>`).join('')}</select></label><label>Movement Type<select id="stType"><option value="production">Production Received</option><option value="purchase">Purchase</option><option value="return">Return In</option><option value="damage">Damage / Loss</option><option value="adjustment">Adjustment</option></select></label><label>Quantity Change<input id="stQty" type="number" required placeholder="+100 or -5"></label><label class="full">Notes<textarea id="stNotes"></textarea></label><div class="full"><button class="btn primary">Update Stock</button></div></form>`); $('#stockForm').onsubmit=async e=>{e.preventDefault(); let q=Number($('#stQty').value); if($('#stType').value==='damage'&&q>0)q=-q; const {error}=await sb.rpc('adjust_stock',{p_product_id:$('#stProduct').value,p_qty_change:q,p_movement_type:$('#stType').value,p_notes:$('#stNotes').value||null}); if(error)return toast(error.message,true);closeModal();toast('Stock updated.');loadAll();}; }
-  function openProductForm(){ showModal('Add Product',`<form id="productForm" class="form-grid"><label>SKU<input id="pSku" required></label><label>Product Name<input id="pName" required></label><label>MRP<input id="pMrp" type="number" min="0" step="0.01" value="0"></label><label>Sale Price<input id="pSale" type="number" min="0" step="0.01" value="0"></label><label>Cost Price<input id="pCost" type="number" min="0" step="0.01" value="0"></label><label>Low Stock Alert<input id="pLow" type="number" min="0" value="100"></label><label>Scheme Buy<input id="pBuy" type="number" min="0" value="10"></label><label>Scheme Free<input id="pFree" type="number" min="0" value="1"></label><div class="full"><button class="btn primary">Add Product</button></div></form>`); $('#productForm').onsubmit=async e=>{e.preventDefault(); const {error}=await sb.from('products').insert({sku:$('#pSku').value,name:$('#pName').value,mrp:Number($('#pMrp').value),sale_price:Number($('#pSale').value),cost_price:Number($('#pCost').value),stock_qty:0,low_stock_threshold:Number($('#pLow').value),scheme_buy:Number($('#pBuy').value),scheme_free:Number($('#pFree').value)}); if(error)return toast(error.message,true);closeModal();toast('Product added. Use Stock In to add quantity.');loadAll();}; }
-
-  function renderRecovery(){
-    const due=state.sales.filter(s=>Number(s.total)>Number(s.paid_amount));
-    $('#recoveryPage').innerHTML=`<div class="section-head"><div><h3>Recovery / Outstanding</h3><div class="muted">${due.length} invoice(s) with balance</div></div></div><div class="table-wrap"><table class="table"><thead><tr><th>Invoice</th><th>Customer</th><th>Salesman</th><th>Total</th><th>Paid</th><th>Balance</th><th></th></tr></thead><tbody>${due.map(s=>`<tr><td>${esc(s.invoice_no)}</td><td>${esc(customerName(s.customer_id))}</td><td>${esc(profileName(s.salesman_id))}</td><td>${money(s.total)}</td><td>${money(s.paid_amount)}</td><td><b>${money(Number(s.total)-Number(s.paid_amount))}</b></td><td>${can('admin','recovery')||s.salesman_id===state.me.id?`<button class="btn primary small" data-recover="${s.id}">Receive</button>`:''}</td></tr>`).join('')||'<tr><td colspan="7" class="empty">No outstanding invoices.</td></tr>'}</tbody></table></div><div class="section-head"><h3>Recent Payments</h3></div><div class="table-wrap"><table class="table"><thead><tr><th>Date</th><th>Invoice</th><th>Customer</th><th>Amount</th><th>Method</th><th>Collected By</th></tr></thead><tbody>${state.payments.slice(0,50).map(p=>{const s=state.sales.find(x=>x.id===p.sale_id);return `<tr><td>${dt(p.payment_date)}</td><td>${esc(s?.invoice_no||'—')}</td><td>${esc(customerName(p.customer_id))}</td><td>${money(p.amount)}</td><td>${esc(p.method)}</td><td>${esc(profileName(p.collected_by))}</td></tr>`}).join('')}</tbody></table></div>`;
-    $$('[data-recover]').forEach(b=>b.onclick=()=>openRecoveryForm(b.dataset.recover));
-  }
-  function openRecoveryForm(saleId){ const s=state.sales.find(x=>x.id===saleId); if(!s)return; const balance=Number(s.total)-Number(s.paid_amount); showModal(`Receive Payment — ${s.invoice_no}`,`<form id="recoveryForm" class="form-grid"><label>Balance<input value="${balance}" disabled></label><label>Amount<input id="rAmount" type="number" min="0.01" max="${balance}" step="0.01" value="${balance}" required></label><label>Method<select id="rMethod"><option>cash</option><option>bank</option><option>easypaisa</option><option>jazzcash</option><option>cheque</option></select></label><label>Reference<input id="rRef"></label><label class="full">Notes<textarea id="rNotes"></textarea></label><div class="full"><button class="btn primary">Save Recovery</button></div></form>`); $('#recoveryForm').onsubmit=async e=>{e.preventDefault();const {error}=await sb.rpc('record_payment',{p_sale_id:saleId,p_amount:Number($('#rAmount').value),p_method:$('#rMethod').value,p_reference:$('#rRef').value||null,p_notes:$('#rNotes').value||null});if(error)return toast(error.message,true);closeModal();toast('Payment recorded.');loadAll();}; }
-
-  function renderExpenses(){ if(!can('admin'))return; const total=state.expenses.reduce((a,e)=>a+Number(e.amount),0); $('#expensesPage').innerHTML=`<div class="section-head"><div><h3>Expenses</h3><div class="muted">Loaded total ${money(total)}</div></div><button id="addExpenseBtn" class="btn primary">+ Expense</button></div><div class="table-wrap"><table class="table"><thead><tr><th>Date</th><th>Category</th><th>Description</th><th>Amount</th></tr></thead><tbody>${state.expenses.map(e=>`<tr><td>${date(e.expense_date)}</td><td>${esc(e.category)}</td><td>${esc(e.description||'')}</td><td>${money(e.amount)}</td></tr>`).join('')}</tbody></table></div>`; $('#addExpenseBtn').onclick=()=>{showModal('Add Expense',`<form id="expenseForm" class="form-grid"><label>Date<input id="eDate" type="date" value="${new Date().toISOString().slice(0,10)}"></label><label>Category<select id="eCat"><option>Salary</option><option>Petrol/Transport</option><option>Marketing</option><option>Office</option><option>Recovery Incentive</option><option>Other</option></select></label><label>Amount<input id="eAmount" type="number" min="0.01" step="0.01" required></label><label class="full">Description<textarea id="eDesc"></textarea></label><div class="full"><button class="btn primary">Save Expense</button></div></form>`);$('#expenseForm').onsubmit=async e=>{e.preventDefault();const {error}=await sb.from('expenses').insert({expense_date:$('#eDate').value,category:$('#eCat').value,description:$('#eDesc').value||null,amount:Number($('#eAmount').value),entered_by:state.me.id});if(error)return toast(error.message,true);closeModal();toast('Expense saved.');loadAll();};}; }
-
-  function renderReports(){ if(!can('admin'))return; const start=monthStart(), sales=state.sales.filter(s=>new Date(s.sale_date)>=start), rev=sales.reduce((a,s)=>a+Number(s.total),0), collected=sales.reduce((a,s)=>a+Number(s.paid_amount),0), expenses=state.expenses.filter(e=>new Date(e.expense_date)>=start).reduce((a,e)=>a+Number(e.amount),0); let cogs=0; // approximate from current product cost * paid qty fetched only on demand, so report labels this as contribution before COGS.
-    $('#reportsPage').innerHTML=`<div class="grid cards"><div class="card stat"><small>Monthly Sales</small><strong>${money(rev)}</strong></div><div class="card stat"><small>Monthly Collection</small><strong>${money(collected)}</strong></div><div class="card stat"><small>Monthly Expenses</small><strong>${money(expenses)}</strong></div><div class="card stat"><small>Cash Contribution*</small><strong>${money(collected-expenses)}</strong><div class="sub">*Collection minus expenses; not accounting profit</div></div></div><div class="section-head"><h3>Salesman Summary</h3><button id="reportCsvBtn" class="btn ghost">Export Sales CSV</button></div>${can('admin')?salesmanSummaryTable(sales):''}`; $('#reportCsvBtn').onclick=exportSales;
-  }
-  function salesmanSummaryTable(sales){ const reps=state.profiles.filter(p=>p.role==='salesman'); return `<div class="table-wrap"><table class="table"><thead><tr><th>Salesman</th><th>Route</th><th>Invoices</th><th>Sales</th><th>Collected</th><th>Outstanding</th><th>Target</th><th>%</th></tr></thead><tbody>${reps.map(p=>{const ss=sales.filter(s=>s.salesman_id===p.id),v=ss.reduce((a,s)=>a+Number(s.total),0),c=ss.reduce((a,s)=>a+Number(s.paid_amount),0),pct=Number(p.monthly_target)>0?v/Number(p.monthly_target)*100:0;return `<tr><td>${esc(p.full_name)}</td><td>${esc(p.route_area||'')}</td><td>${ss.length}</td><td>${money(v)}</td><td>${money(c)}</td><td>${money(v-c)}</td><td>${money(p.monthly_target)}</td><td>${pct.toFixed(1)}%</td></tr>`}).join('')}</tbody></table></div>`; }
-  function exportSales(){ const rows=[['Invoice','Date','Customer','Salesman','Total','Paid','Balance','Status'],...state.sales.map(s=>[s.invoice_no,new Date(s.sale_date).toISOString(),customerName(s.customer_id),profileName(s.salesman_id),s.total,s.paid_amount,Number(s.total)-Number(s.paid_amount),s.payment_status])]; const csv=rows.map(r=>r.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\n'); const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download=`naturegen-sales-${new Date().toISOString().slice(0,10)}.csv`;a.click();URL.revokeObjectURL(a.href); }
-
-  function renderUsers(){ if(!can('admin'))return; $('#usersPage').innerHTML=`<div class="section-head"><div><h3>Users & Roles</h3><div class="muted">Create Auth users in Supabase, then assign their role here.</div></div></div><div class="table-wrap"><table class="table"><thead><tr><th>Name</th><th>Role</th><th>Phone</th><th>Route</th><th>Monthly Target</th><th>Active</th><th></th></tr></thead><tbody>${state.profiles.map(p=>`<tr><td><b>${esc(p.full_name)}</b></td><td><span class="badge">${esc(p.role)}</span></td><td>${esc(p.phone||'')}</td><td>${esc(p.route_area||'')}</td><td>${money(p.monthly_target)}</td><td>${p.active?'Yes':'No'}</td><td><button class="btn ghost small" data-user="${p.id}">Edit</button></td></tr>`).join('')}</tbody></table></div>`; $$('[data-user]').forEach(b=>b.onclick=()=>openUserForm(b.dataset.user)); }
-  function openUserForm(id){ const p=state.profiles.find(x=>x.id===id); showModal('Edit User Role',`<form id="userForm" class="form-grid"><label>Full Name<input id="uName" value="${esc(p.full_name)}"></label><label>Phone<input id="uPhone" value="${esc(p.phone||'')}"></label><label>Role<select id="uRole">${['admin','inventory','salesman','recovery'].map(r=>`<option ${p.role===r?'selected':''}>${r}</option>`).join('')}</select></label><label>Route / Area<input id="uRoute" value="${esc(p.route_area||'')}"></label><label>Monthly Target<input id="uTarget" type="number" min="0" step="0.01" value="${p.monthly_target||0}"></label><label>Active<select id="uActive"><option value="true" ${p.active?'selected':''}>Yes</option><option value="false" ${!p.active?'selected':''}>No</option></select></label><div class="full"><button class="btn primary">Save User</button></div></form>`); $('#userForm').onsubmit=async e=>{e.preventDefault();const {error}=await sb.from('profiles').update({full_name:$('#uName').value,phone:$('#uPhone').value||null,role:$('#uRole').value,route_area:$('#uRoute').value||null,monthly_target:Number($('#uTarget').value||0),active:$('#uActive').value==='true'}).eq('id',id);if(error)return toast(error.message,true);closeModal();toast('User updated.');loadAll();}; }
-
-  function renderSettings(){ if(!can('admin'))return; const s=state.settings||{}; $('#settingsPage').innerHTML=`<div class="card" style="max-width:720px"><h3>Company Settings</h3><form id="settingsForm" class="form-grid"><label>Company Name<input id="setName" value="${esc(s.company_name||'Naturegen Distribution')}"></label><label>Phone<input id="setPhone" value="${esc(s.phone||'')}"></label><label class="full">Address<textarea id="setAddress">${esc(s.address||'')}</textarea></label><label>Monthly Profit Target<input id="setTarget" type="number" min="0" step="0.01" value="${s.monthly_profit_target||100000}"></label><div class="full"><button class="btn primary">Save Settings</button></div></form></div>`; $('#settingsForm').onsubmit=async e=>{e.preventDefault();const {error}=await sb.from('app_settings').update({company_name:$('#setName').value,phone:$('#setPhone').value||null,address:$('#setAddress').value||null,monthly_profit_target:Number($('#setTarget').value||0),updated_at:new Date().toISOString()}).eq('id',1);if(error)return toast(error.message,true);toast('Settings saved.');loadAll();}; }
-
-  function showLogin(){ $('#appView').classList.add('hidden'); $('#loginView').classList.remove('hidden'); }
-  function showApp(){ $('#loginView').classList.add('hidden'); $('#appView').classList.remove('hidden'); }
-
-  async function init(){
-    if(!configured){ $('#configWarning').classList.remove('hidden'); return; }
-    const {data}=await sb.auth.getSession(); state.session=data.session;
-    if(state.session){ showApp(); await loadAll(); } else showLogin();
-    sb.auth.onAuthStateChange((_e,session)=>{ state.session=session; if(session){showApp();setTimeout(loadAll,0);}else{state.me=null;state.channel=null;showLogin();} });
-  }
-
-  $('#loginForm').onsubmit=async e=>{e.preventDefault();if(!sb)return toast('Connect Supabase in config.js first.',true);const {error}=await sb.auth.signInWithPassword({email:$('#loginEmail').value.trim(),password:$('#loginPassword').value});if(error)toast(error.message,true);};
-  $('#logoutBtn').onclick=async()=>{ if(state.channel){await sb.removeChannel(state.channel);state.channel=null;} await sb.auth.signOut(); };
-  $('#refreshBtn').onclick=loadAll; $('#modalClose').onclick=closeModal; $('#modal').addEventListener('click',e=>{if(e.target===$('#modal'))closeModal();});
-  init();
-})();
+init();
