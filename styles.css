@@ -29,3 +29,155 @@
 .code-chip{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#f2f4f7;border:1px solid var(--line);padding:.15rem .35rem;border-radius:5px}
 @media(max-width:800px){.sale-line{grid-template-columns:1fr 1fr}.sale-line .wide{grid-column:1/-1}.sidebar{width:72px}.sidebar-brand div,.sidebar-user>div,.sidebar-user>small,.nav-btn span{display:none}.main{margin-left:72px}.sidebar-brand{justify-content:center}.sidebar-user{padding:.75rem .35rem}}
 @media(max-width:520px){.main{margin-left:0;padding-bottom:80px}.sidebar{position:fixed;left:0;right:0;bottom:0;top:auto;width:auto;height:70px;z-index:20;display:flex;align-items:center;padding:0}.sidebar-brand,.sidebar-user{display:none}.sidebar nav{display:flex;width:100%;overflow-x:auto;padding:.3rem}.nav-btn{min-width:72px;justify-content:center;flex-direction:column;gap:.15rem;font-size:.72rem}.nav-btn span{display:block}.topbar{padding:.8rem 1rem}.page{padding:1rem}.sale-line{grid-template-columns:1fr}}
+
+
+/* =========================================================
+   Naturegen Option 1 — Light Professional Theme
+   ========================================================= */
+:root{
+  --bg:#f6faf6;
+  --card:#ffffff;
+  --ink:#16362c;
+  --muted:#6f7f79;
+  --brand:#2f9e44;
+  --brand2:#63c132;
+  --brand-dark:#176b34;
+  --brand-soft:#eaf7e9;
+  --accent:#f3b51b;
+  --accent-soft:#fff6dc;
+  --line:#dfe9e2;
+  --danger:#b42318;
+  --warn:#b66b00;
+  --ok:#16733b;
+  --shadow:0 14px 34px rgba(33,77,55,.09);
+}
+body{
+  background:
+    radial-gradient(circle at 92% 4%,rgba(125,201,87,.10),transparent 24%),
+    linear-gradient(180deg,#f9fcf8 0%,#f4f9f4 100%);
+  color:var(--ink);
+}
+.auth-shell{
+  background:
+    radial-gradient(circle at 12% 85%,rgba(80,173,67,.13),transparent 28%),
+    radial-gradient(circle at 90% 12%,rgba(243,181,27,.08),transparent 22%),
+    linear-gradient(145deg,#f5fbf3,#fbfcf8 55%,#eef7ed);
+}
+.auth-card{
+  width:min(500px,100%);
+  padding:38px;
+  border:1px solid #dce9dd;
+  border-radius:26px;
+  box-shadow:0 24px 60px rgba(33,77,55,.12);
+}
+.login-brand{
+  display:flex;
+  align-items:center;
+  gap:18px;
+  margin-bottom:14px;
+}
+.brand-logo{display:block;object-fit:contain;background:transparent}
+.login-brand-logo{width:150px;height:120px;flex:0 0 auto}
+.login-brand h1{margin:0;color:#153b27;font-size:2rem;line-height:1.05}
+.login-brand .muted{margin:8px 0 0}
+.stack{margin-top:22px}
+input,select,textarea{
+  border-color:#cddccf;
+  border-radius:12px;
+  background:#fff;
+}
+input:focus,select:focus,textarea:focus{
+  border-color:var(--brand);
+  box-shadow:0 0 0 3px rgba(47,158,68,.12);
+}
+.btn{border-radius:11px}
+.btn.primary{
+  background:linear-gradient(90deg,var(--brand-dark),var(--brand),var(--brand2));
+  box-shadow:0 7px 16px rgba(47,158,68,.16);
+}
+.btn.primary:hover{filter:brightness(.97)}
+.btn.ghost{background:#eff7ef;color:#244c35}
+.btn.link{color:var(--brand-dark)}
+.app{grid-template-columns:250px 1fr}
+.sidebar{
+  background:linear-gradient(180deg,#ffffff 0%,#f5faf4 100%);
+  color:var(--ink);
+  border-right:1px solid var(--line);
+  box-shadow:4px 0 24px rgba(30,70,48,.04);
+}
+.sidebar-brand{padding:2px 6px 16px;border-bottom:1px solid #edf3ed}
+.sidebar-logo{width:92px;height:70px}
+.sidebar-brand div{align-content:center}
+.sidebar-brand b{color:#173e28;font-size:16px}
+.sidebar-brand small{color:var(--muted)}
+.nav-btn{color:#365849;border:1px solid transparent}
+.nav-btn b{color:var(--brand-dark)}
+.nav-btn:hover{
+  background:#f0f8ee;
+  color:#1c5d31;
+  border-color:#e0efdd;
+}
+.nav-btn.active{
+  background:linear-gradient(90deg,#e5f6df,#f8fdf6);
+  color:#155f31;
+  border-color:#d0ebca;
+  box-shadow:inset 4px 0 0 var(--brand);
+}
+.sidebar-user{
+  background:#f0f7ef;
+  border:1px solid #dfecdf;
+  color:var(--ink);
+}
+.sidebar-user small{color:var(--muted)}
+.topbar{
+  background:rgba(248,251,247,.94);
+  border-bottom:1px solid var(--line);
+}
+.topbar h2{color:#183a2a}
+.card{
+  border-color:#e2ebe3;
+  box-shadow:0 7px 20px rgba(28,73,48,.045);
+}
+.stat{
+  position:relative;
+  overflow:hidden;
+}
+.stat:after{
+  content:"";
+  position:absolute;
+  right:-24px;top:-28px;
+  width:82px;height:82px;
+  border-radius:50%;
+  background:rgba(89,185,69,.07);
+}
+.stat strong{color:var(--brand-dark)}
+.section-head h3{color:#173d2a}
+.table-wrap{border-color:#dfe9e1;box-shadow:0 6px 18px rgba(28,73,48,.035)}
+.table th{background:#f3f9f2;color:#385b48}
+.table tr:hover td{background:#fbfdf9}
+.badge{background:#eff6ef}
+.badge.ok{background:#e3f7e7;color:#0d7337}
+.badge.warn{background:#fff3d2;color:#8c5b00}
+.progress{background:#e8f2e5}
+.progress>span{background:linear-gradient(90deg,var(--brand),var(--brand2),var(--accent))}
+.modal-card{border:1px solid #dfe9e1}
+.icon-btn{background:#eef6ee;color:#214d34}
+.toast{background:#1b5b36}
+.setup-card{background:#fbfff9;border-color:#cce6c8}
+.invoice-brand{display:flex;align-items:center;gap:16px;margin-bottom:12px}
+.invoice-brand img{width:105px;height:76px;object-fit:contain}
+.invoice-brand h2{color:#176b34;margin:0 0 4px}
+.invoice-brand p{margin:2px 0;color:#566c61}
+.invoice hr{border:0;border-top:2px solid #dcebd9;margin:14px 0}
+.invoice table th{background:#eef7eb;color:#214b31}
+@media(max-width:1000px){
+  .app{grid-template-columns:88px 1fr}
+  .sidebar-logo{width:56px;height:52px;margin:auto}
+  .sidebar-brand div{display:none}
+}
+@media(max-width:650px){
+  .login-brand{flex-direction:column;text-align:center}
+  .login-brand-logo{width:135px;height:105px}
+  .login-brand h1{font-size:1.8rem}
+  .auth-card{padding:28px 22px}
+}
