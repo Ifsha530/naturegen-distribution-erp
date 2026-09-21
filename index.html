@@ -4,11 +4,12 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#0b5d4b" />
+  <meta name="description" content="Naturegen Distribution Online Multi-User ERP" />
   <title>Naturegen Distribution ERP</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div id="toast" class="toast"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <section id="loginView" class="auth-shell">
     <div class="auth-card">
@@ -19,8 +20,10 @@
         <label>Email<input id="loginEmail" type="email" autocomplete="username" required placeholder="user@example.com"></label>
         <label>Password<input id="loginPassword" type="password" autocomplete="current-password" required placeholder="••••••••"></label>
         <button class="btn primary" type="submit">Sign in</button>
+        <button id="forgotPasswordBtn" class="btn link" type="button">Forgot password?</button>
       </form>
-      <div id="configWarning" class="warning hidden">Supabase is not connected yet. Open <b>config.js</b> and add your Project URL and publishable/anon key.</div>
+      <div id="configWarning" class="warning hidden">Firebase is not connected yet. Open <b>config.js</b> and paste your Firebase web app configuration.</div>
+      <div id="accessWarning" class="warning hidden">Your login exists, but ERP access has not been activated. Ask the Admin to create/activate your user profile.</div>
     </div>
   </section>
 
@@ -65,8 +68,7 @@
     </div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="config.js"></script>
-  <script src="app.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>
