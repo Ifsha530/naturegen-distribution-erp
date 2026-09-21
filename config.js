@@ -7,3 +7,4 @@ window.NATUREGEN_FIREBASE_CONFIG = {
   messagingSenderId: "321429469336",
   appId: "1:321429469336:web:714ca31682b5db280b38ed",
   measurementId: "G-DQQ5JEFWZM"
+};
