@@ -181,3 +181,31 @@ input:focus,select:focus,textarea:focus{
   .login-brand h1{font-size:1.8rem}
   .auth-card{padding:28px 22px}
 }
+
+
+/* Sales approval, ledger, audit and expense controls */
+.badge.status-draft{background:#eef2f6;color:#475467}
+.badge.status-pending_approval{background:#fff4cc;color:#8a5b00}
+.badge.status-approved{background:#e2f7e8;color:#116b37}
+.badge.status-rejected{background:#fee8e7;color:#a9271c}
+.badge.status-cancelled{background:#f2f4f7;color:#667085;text-decoration:line-through}
+.badge.status-active{background:#e2f7e8;color:#116b37}
+.badge.status-inactive{background:#f2f4f7;color:#667085}
+.audit-card{border-left:4px solid var(--brand);padding-left:14px}
+.audit-meta{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:6px}
+.metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:12px 0 18px}
+.metric-box{background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px}
+.metric-box small{display:block;color:var(--muted);margin-bottom:6px}.metric-box strong{font-size:20px;color:var(--brand-dark)}
+.ledger-positive{color:#a33a17;font-weight:700}.ledger-negative{color:#13713b;font-weight:700}
+.ledger-balance{font-weight:800}
+.filter-grid{display:grid;grid-template-columns:repeat(5,minmax(140px,1fr));gap:10px;margin-bottom:14px}
+.filter-grid label{min-width:0}
+.invoice-status-line{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0}
+.approval-note{padding:10px 12px;border-radius:10px;background:#fff8df;border:1px solid #f0dfa1;color:#76540b}
+.danger-note{padding:10px 12px;border-radius:10px;background:#fff0ef;border:1px solid #f0c1bd;color:#8c261d}
+.sale-line{grid-template-columns:minmax(180px,2fr) 100px 100px 110px 110px!important}
+.sale-line .line-free:not([disabled]){background:#fffdf3;border-color:#ecd983}
+.expense-attachment{font-size:12px;color:var(--muted);margin-top:5px}
+.audit-details{white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;background:#f7faf8;padding:8px;border-radius:8px}
+@media(max-width:1000px){.filter-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:650px){.filter-grid,.metric-grid{grid-template-columns:1fr}.sale-line{grid-template-columns:1fr 1fr!important}.sale-line .wide{grid-column:1/-1}}
