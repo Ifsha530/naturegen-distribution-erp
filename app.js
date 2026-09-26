@@ -359,6 +359,54 @@ async function approveInvoice(id){
   }catch(err){console.error(err);toast(err.message,true);}
 }
 
+function rejectInvoice(id){
+  const s=state.sales.find(x=>x.id===id); if(!s||!canApproveInvoice())return;
+  showModal(`Reject ${s.invoiceNo}`,`<form id="rejectInvoiceForm" class="stack"><label>Mandatory rejection reason<textarea id="rejectReason" required></textarea></label><button class="btn danger">Reject Invoice</button></form>`);
+  $('#rejectInvoiceForm').onsubmit=async e=>{e.preventDefault();const reason=$('#rejectReason').value.trim();if(!reason)return;const ref=doc(db,'sales',id);try{await runTransaction(db,async tx=>{const snap=await tx.get(ref);if(!snap.exists()||invoiceStatus(snap.data())!=='pending_approval')throw new Error('Invoice is no longer pending.');if(snap.data().createdBy===state.user.uid)throw new Error('Creator cannot review the same invoice.');const now=Timestamp.now();tx.update(ref,{status:'rejected',rejectionReason:reason,reviewedBy:state.user.uid,reviewerName:state.me?.fullName||'',reviewedAt:now,dispatchEligible:false,updatedAt:now});auditSet(tx,'invoice_rejected','invoice',id,{invoiceNo:snap.data().invoiceNo,reason});});closeModal();toast('Invoice rejected.');}catch(err){toast(err.message,true);}};
+}
+
+async function cancelInvoice(id,softDelete=false){
+  const s0=state.sales.find(x=>x.id===id); if(!s0||!canControlInvoice())return;
+  showModal(`${softDelete?'Archive/Delete':'Cancel'} ${s0.invoiceNo}`,`<form id="cancelInvoiceForm" class="stack"><label>Mandatory reason<textarea id="cancelReason" required></textarea></label><div class="danger-note">The record will remain in the audit trail. Approved invoices will have stock, ledger and payment effects reversed automatically.</div><button class="btn danger">${softDelete?'Archive Record':'Cancel Invoice'}</button></form>`);
+  $('#cancelInvoiceForm').onsubmit=async e=>{
+    e.preventDefault(); const reason=$('#cancelReason').value.trim(); if(!reason)return;
+    const paymentSnap=await getDocs(query(collection(db,'payments'),where('saleId','==',id)));
+    const payRefs=paymentSnap.docs.map(d=>doc(db,'payments',d.id)), payData=paymentSnap.docs.map(d=>({id:d.id,...d.data()}));
+    const saleRef=doc(db,'sales',id), customerRef=doc(db,'customers',s0.customerId), productRefs=(s0.items||[]).map(i=>doc(db,'products',i.productId));
+    const fallbackBalance=customerOutstanding(s0.customerId);
+    try{
+      await runTransaction(db,async tx=>{
+        const saleSnap=await tx.get(saleRef); if(!saleSnap.exists())throw new Error('Invoice not found.');
+        const s=saleSnap.data(), currentStatus=invoiceStatus(s); if(currentStatus==='cancelled')throw new Error('Invoice is already cancelled.');
+        const approved=currentStatus==='approved' || (!s.status && s.stockApplied!==false);
+        const customerSnap=await tx.get(customerRef);
+        const productSnaps=[]; if(approved) for(const ref of productRefs) productSnaps.push(await tx.get(ref));
+        const currentPaymentSnaps=[]; if(approved) for(const ref of payRefs) currentPaymentSnaps.push(await tx.get(ref));
+        const now=Timestamp.now(); let reversedPayments=0;
+        if(approved){
+          productSnaps.forEach((snap,idx)=>{
+            if(!snap.exists())return; const p=snap.data(),item=s.items[idx],add=Number(item.issuedQty||0),bal=Number(p.stockQty||0)+add;
+            tx.update(productRefs[idx],{stockQty:bal,updatedAt:now});
+            const mref=doc(collection(db,'stockMovements'));tx.set(mref,{productId:item.productId,productName:item.name,movementType:'invoice_cancel_reversal',qtyChange:add,paidQty:Number(item.paidQty||0),freeQty:Number(item.freeQty||0),balanceAfter:bal,refType:'sale',refId:id,notes:`Cancellation ${s.invoiceNo}: ${reason}`,enteredBy:state.user.uid,createdAt:now});
+          });
+          currentPaymentSnaps.forEach((snap,idx)=>{
+            if(!snap.exists())return;
+            const p=snap.data(); if(p.reversed===true)return;
+            reversedPayments+=Number(p.amount||0);
+            tx.update(payRefs[idx],{reversed:true,reversedBy:state.user.uid,reversedAt:now,reversalReason:reason});
+            ledgerEntry(tx,{customerId:s.customerId,salesmanId:s.salesmanId,entryType:'payment_reversal',sourceType:'payment_reversal',sourceId:payData[idx].id,documentType:'receipt_reversal',documentId:payData[idx].id,documentNo:`REV-${p.invoiceNo||s.invoiceNo}`,invoiceNo:s.invoiceNo,transactionDate:now,debit:Number(p.amount||0),credit:0,notes:`Payment reversed due to invoice cancellation: ${reason}`});
+          });
+          ledgerEntry(tx,{customerId:s.customerId,salesmanId:s.salesmanId,entryType:'invoice_cancel_reversal',sourceType:'sale_cancel',sourceId:id,documentType:'invoice_cancellation',documentId:id,documentNo:s.invoiceNo,invoiceNo:s.invoiceNo,transactionDate:now,debit:Number(s.discount||0),credit:Number(s.subtotal||s.total||0),notes:`Invoice cancelled: ${reason}`});
+          if(customerSnap.exists()){const cur=customerSnap.data(),base=Number.isFinite(Number(cur.currentBalance))?Number(cur.currentBalance):fallbackBalance;tx.update(customerRef,{currentBalance:base-Number(s.total||0)+reversedPayments,updatedAt:now});}
+        }
+        tx.update(saleRef,{status:'cancelled',cancelledBy:state.user.uid,cancelledByName:state.me?.fullName||'',cancelledAt:now,cancellationReason:reason,softDeleted:Boolean(softDelete),dispatchEligible:false,stockApplied:false,reversedPaidAmount:reversedPayments,paidAmount:0,paymentStatus:'cancelled',updatedAt:now});
+        auditSet(tx,softDelete?'invoice_soft_deleted':'invoice_cancelled','invoice',id,{invoiceNo:s.invoiceNo,reason,previousStatus:currentStatus,reversedPayments});
+      });
+      closeModal();toast(softDelete?'Invoice archived; audit history preserved.':'Invoice cancelled and impacts reversed.');
+    }catch(err){console.error(err);toast(err.message,true);}
+  };
+}
+
 function openInvoice(id){
   const s=state.sales.find(x=>x.id===id); if(!s) return;
   const cust=state.customers.find(x=>x.id===s.customerId); const settings=state.settings||{};
