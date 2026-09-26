@@ -64,8 +64,9 @@ function accessibleSales(){ return state.sales; }
 function approvedSales(){ return state.sales.filter(s=>invoiceStatus(s)==='approved'); }
 function calcStatus(total, paid){ return Number(paid||0) >= Number(total||0)-0.001 ? 'paid' : Number(paid||0)>0 ? 'partial' : 'unpaid'; }
 function isManagement(){ return can('admin','marketing_director','erp_manager'); }
-function canApproveInvoice(){ return can('admin','marketing_director'); }
-function canControlInvoice(){ return can('admin','marketing_director','erp_manager'); }
+function canApproveInvoice(){ return can('marketing_director'); }
+function canControlInvoice(){ return can('marketing_director','erp_manager'); }
+function canDeactivateCustomer(){ return can('marketing_director','erp_manager'); }
 function canManageCustomers(){ return can('admin','marketing_director','erp_manager'); }
 function canManageExpenses(){ return can('admin','marketing_director','erp_manager'); }
 function customerOutstanding(customerId){
@@ -229,7 +230,7 @@ function openSaleForm(){
     <div id="freeExceptionNote" class="approval-note hidden">Complimentary quantity exceeds the product scheme limit. Marketing Director approval is required.</div>
     <div class="form-grid"><label>Discount<input id="saleDiscount" type="number" min="0" step="0.01" value="0"></label><label>Proposed Received Amount<input id="salePaid" type="number" min="0" step="0.01" value="0"></label><label>Payment Method<select id="salePaymentMethod"><option value="cash">Cash</option><option value="bank">Bank</option><option value="easypaisa">Easypaisa</option><option value="jazzcash">JazzCash</option><option value="cheque">Cheque</option></select></label><label class="full">Notes<textarea id="saleNotes"></textarea></label></div>
     <div class="card"><div class="kpi-line"><span>Gross</span><strong id="saleGross">${money(0)}</strong></div><div class="kpi-line"><span>Discount</span><span id="saleDiscountView">${money(0)}</span></div><div class="kpi-line"><span>Invoice Total</span><strong id="saleTotal">${money(0)}</strong></div></div>
-    <div class="actions"><button class="btn ghost" type="submit" data-action="draft">Save Draft</button><button class="btn primary" type="submit" data-action="submit">Submit for Approval</button></div>
+    <div class="actions">${can('admin')?'<button class="btn ghost" type="submit" data-action="draft">Save Draft</button>':''}<button class="btn primary" type="submit" data-action="submit">Submit for Approval</button></div>
   </form>`);
   const recalc=()=>{
     let gross=0,exception=false;
@@ -249,7 +250,7 @@ function openSaleForm(){
 async function saveSale(e){
   e.preventDefault();
   const action=e.submitter?.dataset.action||'submit';
-  const status=action==='draft'?'draft':'pending_approval';
+  const status=(action==='draft' && can('admin'))?'draft':'pending_approval';
   const salesmanId=$('#saleSalesman').value, customerId=$('#saleCustomer').value;
   if(!salesmanId||!customerId) return toast('Select salesman and customer.',true);
   if(can('salesman') && salesmanId!==state.user.uid) return toast('Salesman mismatch.',true);
@@ -403,7 +404,7 @@ function printInvoiceHtml(html){ const w=window.open('','_blank','width=900,heig
 
 function renderCustomers(){
   const rows=state.customers;
-  $('#customersPage').innerHTML=`<div class="section-head"><div><h3>Customers / Pharmacies</h3><div class="muted">${rows.length} accessible customer(s)</div></div>${can('admin','salesman','erp_manager')?'<button id="addCustomerBtn" class="btn primary">+ Add Customer</button>':''}</div><div class="table-wrap"><table class="table"><thead><tr><th>Code</th><th>Customer / Pharmacy</th><th>Contact</th><th>Phone</th><th>Territory</th><th>Salesman</th><th>Credit Limit</th><th>Days</th><th>Balance</th><th>Status</th><th></th></tr></thead><tbody>${rows.map(c=>`<tr><td>${esc(c.customerCode||'—')}</td><td><b>${esc(c.shopName||c.customerName||'')}</b><div class="metric-note">${esc(c.customerName||'')}</div></td><td>${esc(c.ownerName||'')}</td><td>${esc(c.phone||'')}</td><td>${esc(c.territory||c.routeArea||'')}</td><td>${esc(profileName(c.assignedSalesmanId))}</td><td>${money(c.creditLimit)}</td><td>${fmt(c.creditDays)}</td><td><b>${money(Number(c.currentBalance||0))}</b></td><td><span class="badge status-${c.active===false?'inactive':'active'}">${c.active===false?'Inactive':'Active'}</span></td><td><div class="actions">${(canManageCustomers()||c.assignedSalesmanId===state.user.uid)?`<button class="btn ghost small" data-customer="${c.id}">Edit</button>`:''}${canManageCustomers()&&c.active!==false?`<button class="btn danger small" data-deactivate-customer="${c.id}">Deactivate</button>`:''}</div></td></tr>`).join('')||'<tr><td colspan="11" class="empty">No customers yet.</td></tr>'}</tbody></table></div>`;
+  $('#customersPage').innerHTML=`<div class="section-head"><div><h3>Customers / Pharmacies</h3><div class="muted">${rows.length} accessible customer(s)</div></div>${can('admin','salesman','erp_manager')?'<button id="addCustomerBtn" class="btn primary">+ Add Customer</button>':''}</div><div class="table-wrap"><table class="table"><thead><tr><th>Code</th><th>Customer / Pharmacy</th><th>Contact</th><th>Phone</th><th>Territory</th><th>Salesman</th><th>Credit Limit</th><th>Days</th><th>Balance</th><th>Status</th><th></th></tr></thead><tbody>${rows.map(c=>`<tr><td>${esc(c.customerCode||'—')}</td><td><b>${esc(c.shopName||c.customerName||'')}</b><div class="metric-note">${esc(c.customerName||'')}</div></td><td>${esc(c.ownerName||'')}</td><td>${esc(c.phone||'')}</td><td>${esc(c.territory||c.routeArea||'')}</td><td>${esc(profileName(c.assignedSalesmanId))}</td><td>${money(c.creditLimit)}</td><td>${fmt(c.creditDays)}</td><td><b>${money(Number(c.currentBalance||0))}</b></td><td><span class="badge status-${c.active===false?'inactive':'active'}">${c.active===false?'Inactive':'Active'}</span></td><td><div class="actions">${(canManageCustomers()||c.assignedSalesmanId===state.user.uid)?`<button class="btn ghost small" data-customer="${c.id}">Edit</button>`:''}${canDeactivateCustomer()&&c.active!==false?`<button class="btn danger small" data-deactivate-customer="${c.id}">Deactivate</button>`:''}</div></td></tr>`).join('')||'<tr><td colspan="11" class="empty">No customers yet.</td></tr>'}</tbody></table></div>`;
   if($('#addCustomerBtn')) $('#addCustomerBtn').onclick=()=>openCustomerForm();
   $$('[data-customer]').forEach(b=>b.onclick=()=>openCustomerForm(b.dataset.customer));
   $$('[data-deactivate-customer]').forEach(b=>b.onclick=()=>deactivateCustomer(b.dataset.deactivateCustomer));
@@ -441,7 +442,7 @@ function openCustomerForm(id=null){
 }
 
 function deactivateCustomer(id){
-  if(!canManageCustomers())return;
+  if(!canDeactivateCustomer())return;
   const cust=state.customers.find(c=>c.id===id); if(!cust)return;
   showModal(`Deactivate ${cust.shopName||cust.customerCode}`,`<form id="deactivateCustomerForm" class="stack"><label>Mandatory reason<textarea id="customerDeactivateReason" required></textarea></label><div class="approval-note">Records with invoices, payments, balances or ledger history are preserved and only marked Inactive.</div><button class="btn danger">Deactivate Customer</button></form>`);
   $('#deactivateCustomerForm').onsubmit=async e=>{e.preventDefault();const reason=$('#customerDeactivateReason').value.trim();if(!reason)return;const ref=doc(db,'customers',id);try{await runTransaction(db,async tx=>{const snap=await tx.get(ref);if(!snap.exists())throw new Error('Customer not found.');const now=Timestamp.now();tx.update(ref,{active:false,deactivatedBy:state.user.uid,deactivatedByName:state.me?.fullName||'',deactivatedAt:now,deactivationReason:reason,updatedAt:now});auditSet(tx,'customer_deactivated','customer',id,{customerCode:snap.data().customerCode||'',reason});});closeModal();toast('Customer marked inactive.');}catch(err){toast(err.message,true);}};
