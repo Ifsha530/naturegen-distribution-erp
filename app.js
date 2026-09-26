@@ -218,21 +218,22 @@ function renderDashboard(){
 }
 
 function salesTable(rows,actions=true){
-  return `<div class="table-wrap"><table class="table"><thead><tr><th>Invoice</th><th>Date</th><th>Customer</th><th>Salesman</th><th>Total</th><th>Paid</th><th>Balance</th><th>Status</th>${actions?'<th></th>':''}</tr></thead><tbody>${rows.map(s=>`<tr><td><b>${esc(s.invoiceNo)}</b></td><td>${date(s.saleDate)}</td><td>${esc(customerName(s.customerId))}</td><td>${esc(profileName(s.salesmanId))}</td><td>${money(s.total)}</td><td>${money(s.paidAmount)}</td><td>${money(Number(s.total||0)-Number(s.paidAmount||0))}</td><td>${badgeStatus(s.paymentStatus)}</td>${actions?`<td><button class="btn ghost small" data-invoice="${s.id}">View</button></td>`:''}</tr>`).join('')||`<tr><td colspan="${actions?9:8}" class="empty">No invoices found.</td></tr>`}</tbody></table></div>`;
+  return `<div class="table-wrap"><table class="table"><thead><tr><th>Invoice</th><th>Date</th><th>Customer</th><th>Salesman</th><th>Total</th><th>Paid</th><th>Balance</th><th>Approval</th><th>Payment</th>${actions?'<th></th>':''}</tr></thead><tbody>${rows.map(s=>`<tr><td><b>${esc(s.invoiceNo)}</b></td><td>${date(s.saleDate)}</td><td>${esc(customerName(s.customerId))}</td><td>${esc(profileName(s.salesmanId))}</td><td>${money(s.total)}</td><td>${money(s.paidAmount)}</td><td>${money(Math.max(0,Number(s.total||0)-Number(s.paidAmount||0)))}</td><td>${statusBadge(s)}</td><td>${badgeStatus(s.paymentStatus)}</td>${actions?`<td><button class="btn ghost small" data-invoice="${s.id}">View</button></td>`:''}</tr>`).join('')||`<tr><td colspan="${actions?10:9}" class="empty">No invoices found.</td></tr>`}</tbody></table></div>`;
 }
 
 function renderSales(){
   const reps=state.users.filter(u=>u.role==='salesman'&&u.active!==false);
   const canCreate=can('admin','salesman');
-  $('#salesPage').innerHTML=`<div class="section-head"><div><h3>${can('salesman')?'My Sales':'Sales & Invoices'}</h3><div class="muted">Stock is deducted automatically when a sale is saved.</div></div>${canCreate?'<button id="newSaleBtn" class="btn primary">+ New Sale</button>':''}</div>
-  <div class="filters"><label>Search<input id="saleSearch" placeholder="Invoice / customer"></label>${can('admin')?`<label>Salesman<select id="saleRepFilter"><option value="">All</option>${reps.map(r=>`<option value="${r.id}">${esc(r.fullName)}</option>`).join('')}</select></label>`:''}</div><div id="salesTableHost">${salesTable(accessibleSales())}</div>`;
+  const title=can('marketing_director')?'Invoice Approval':can('salesman')?'My Sales':'Sales & Invoices';
+  $('#salesPage').innerHTML=`<div class="section-head"><div><h3>${title}</h3><div class="muted">Stock, ledger and dispatch become effective only after invoice approval.</div></div>${canCreate?'<button id="newSaleBtn" class="btn primary">+ New Invoice</button>':''}</div>
+  <div class="filters"><label>Search<input id="saleSearch" placeholder="Invoice / customer"></label><label>Approval Status<select id="saleStatusFilter"><option value="">All</option><option value="draft">Draft</option><option value="pending_approval">Pending Approval</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="cancelled">Cancelled</option></select></label>${can('admin','marketing_director','erp_manager')?`<label>Salesman<select id="saleRepFilter"><option value="">All</option>${reps.map(r=>`<option value="${r.id}">${esc(r.fullName)}</option>`).join('')}</select></label>`:''}</div><div id="salesTableHost">${salesTable(accessibleSales())}</div>`;
   if(canCreate) $('#newSaleBtn').onclick=openSaleForm;
   const refresh=()=>{
-    const term=($('#saleSearch')?.value||'').toLowerCase(), rep=$('#saleRepFilter')?.value||'';
-    const rows=accessibleSales().filter(s=>(!rep||s.salesmanId===rep) && (!term||String(s.invoiceNo||'').toLowerCase().includes(term)||customerName(s.customerId).toLowerCase().includes(term)));
+    const term=($('#saleSearch')?.value||'').toLowerCase(), rep=$('#saleRepFilter')?.value||'', st=$('#saleStatusFilter')?.value||'';
+    const rows=accessibleSales().filter(s=>(!rep||s.salesmanId===rep) && (!st||invoiceStatus(s)===st) && (!term||String(s.invoiceNo||'').toLowerCase().includes(term)||customerName(s.customerId).toLowerCase().includes(term)));
     $('#salesTableHost').innerHTML=salesTable(rows); bindInvoiceButtons();
   };
-  $('#saleSearch').oninput=refresh; if($('#saleRepFilter')) $('#saleRepFilter').onchange=refresh; bindInvoiceButtons();
+  $('#saleSearch').oninput=refresh; $('#saleStatusFilter').onchange=refresh; if($('#saleRepFilter')) $('#saleRepFilter').onchange=refresh; bindInvoiceButtons();
 }
 function bindInvoiceButtons(){ $$('[data-invoice]').forEach(b=>b.onclick=()=>openInvoice(b.dataset.invoice)); }
 
