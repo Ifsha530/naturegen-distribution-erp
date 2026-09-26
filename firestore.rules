@@ -16,17 +16,28 @@ service cloud.firestore {
     function isMarketingDirector() { return roleIs('marketing_director'); }
     function isERPManager() { return roleIs('erp_manager'); }
     function isManagement() { return isAdmin() || isMarketingDirector() || isERPManager(); }
-    function canApproveInvoices() { return isAdmin() || isMarketingDirector(); }
-    function canControlInvoices() { return isAdmin() || isMarketingDirector() || isERPManager(); }
+    function canApproveInvoices() { return isMarketingDirector(); }
+    function canControlInvoices() { return isMarketingDirector() || isERPManager(); }
+    function canManageExpenses() { return isAdmin() || isMarketingDirector() || isERPManager(); }
+
+    function saleStatus(data) { return data.get('status', 'approved'); }
+    function expenseStatus(data) { return data.get('status', 'draft'); }
     function saleDoc(saleId) { return get(/databases/$(database)/documents/sales/$(saleId)); }
+    function saleAfter(saleId) { return getAfter(/databases/$(database)/documents/sales/$(saleId)); }
+    function paymentAfter(paymentId) { return getAfter(/databases/$(database)/documents/payments/$(paymentId)); }
+    function customerAfter(customerId) { return getAfter(/databases/$(database)/documents/customers/$(customerId)); }
     function saleBelongsToMe(saleId) {
       return saleDoc(saleId).data.salesmanId == request.auth.uid;
     }
     function validPaymentUpdate() {
-      return resource.data.status == 'approved'
+      return saleStatus(resource.data) == 'approved'
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['paidAmount','paymentStatus','updatedAt'])
         && request.resource.data.paidAmount >= resource.data.paidAmount
         && request.resource.data.paidAmount <= resource.data.total;
+    }
+    function validCancellationReason() {
+      return request.resource.data.cancellationReason is string
+        && request.resource.data.cancellationReason.size() > 0;
     }
 
     match /users/{uid} {
@@ -38,7 +49,9 @@ service cloud.firestore {
     match /products/{productId} {
       allow read: if activeUser();
       allow create: if isAdmin() || isERPManager();
-      allow update: if isAdmin() || isERPManager() || isInventory() || isMarketingDirector();
+      allow update: if isAdmin() || isERPManager() || isInventory()
+        || (isMarketingDirector()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stockQty','updatedAt']));
       allow delete: if false;
     }
 
@@ -47,7 +60,8 @@ service cloud.firestore {
       allow create: if isAdmin() || isERPManager()
         || (isSalesman()
           && request.resource.data.createdBy == request.auth.uid
-          && getAfter(/databases/$(database)/documents/customers/$(request.resource.data.customerId)).data.assignedSalesmanId == request.auth.uid);
+          && customerAfter(request.resource.data.customerId).data.assignedSalesmanId == request.auth.uid
+          && customerAfter(request.resource.data.customerId).data.createdBy == request.auth.uid);
       allow update: if isAdmin() || isERPManager() || isMarketingDirector();
       allow delete: if false;
     }
@@ -55,20 +69,44 @@ service cloud.firestore {
     match /customers/{customerId} {
       allow read: if isManagement() || isInventory() || isRecovery()
         || (isSalesman() && resource.data.assignedSalesmanId == request.auth.uid);
+
       allow create: if isAdmin() || isERPManager()
         || (isSalesman()
           && request.resource.data.assignedSalesmanId == request.auth.uid
           && request.resource.data.createdBy == request.auth.uid
-          && request.resource.data.active == true);
-      allow update: if isManagement()
-        || (isSalesman()
+          && request.resource.data.active == true
+          && request.resource.data.get('complimentarySchemeEligible', false) == false);
+
+      allow update: if
+        (
+          (isMarketingDirector() || isERPManager())
+          && (
+            request.resource.data.get('active', true) == resource.data.get('active', true)
+            || (
+              resource.data.get('active', true) == true
+              && request.resource.data.get('active', true) == false
+              && request.resource.data.deactivationReason is string
+              && request.resource.data.deactivationReason.size() > 0
+              && request.resource.data.deactivatedBy == request.auth.uid
+            )
+          )
+        )
+        || (
+          isAdmin()
+          && request.resource.data.get('active', true) == resource.data.get('active', true)
+        )
+        || (
+          isSalesman()
           && resource.data.assignedSalesmanId == request.auth.uid
           && request.resource.data.assignedSalesmanId == request.auth.uid
-          && request.resource.data.active == resource.data.active
-          && request.resource.data.customerCode == resource.data.customerCode
-          && request.resource.data.currentBalance == resource.data.currentBalance
+          && request.resource.data.get('active', true) == resource.data.get('active', true)
+          && request.resource.data.get('customerCode', '') == resource.data.get('customerCode', '')
+          && request.resource.data.get('currentBalance', 0) == resource.data.get('currentBalance', 0)
+          && request.resource.data.get('complimentarySchemeEligible', false) == resource.data.get('complimentarySchemeEligible', false)
           && request.resource.data.diff(resource.data).affectedKeys()
-             .hasOnly(['address','routeArea','territory','creditLimit','creditDays','updatedAt']));
+             .hasOnly(['address','routeArea','territory','creditLimit','creditDays','updatedAt'])
+        );
+
       allow delete: if false;
     }
 
@@ -76,37 +114,67 @@ service cloud.firestore {
       allow read: if isManagement() || isInventory() || isRecovery()
         || (isSalesman() && resource.data.salesmanId == request.auth.uid);
 
-      allow create: if isAdmin()
-        || (isSalesman()
-          && request.resource.data.salesmanId == request.auth.uid
+      allow create: if
+        (
+          isAdmin()
           && request.resource.data.createdBy == request.auth.uid
-          && request.resource.data.status in ['draft','pending_approval']
-          && request.resource.data.dispatchEligible == false
-          && request.resource.data.stockApplied == false);
-
-      allow update: if
-        isAdmin()
-        || (
-          isSalesman()
-          && resource.data.salesmanId == request.auth.uid
-          && resource.data.createdBy == request.auth.uid
-          && resource.data.status == 'draft'
           && request.resource.data.status in ['draft','pending_approval']
           && request.resource.data.dispatchEligible == false
           && request.resource.data.stockApplied == false
         )
         || (
+          isSalesman()
+          && request.resource.data.salesmanId == request.auth.uid
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.status == 'pending_approval'
+          && request.resource.data.dispatchEligible == false
+          && request.resource.data.stockApplied == false
+        );
+
+      allow update: if
+        (
+          isAdmin()
+          && saleStatus(resource.data) == 'draft'
+          && request.resource.data.status in ['draft','pending_approval']
+          && request.resource.data.dispatchEligible == false
+          && request.resource.data.stockApplied == false
+        )
+        || (
+          isSalesman()
+          && resource.data.salesmanId == request.auth.uid
+          && resource.data.createdBy == request.auth.uid
+          && saleStatus(resource.data) == 'draft'
+          && request.resource.data.status == 'pending_approval'
+          && request.resource.data.dispatchEligible == false
+          && request.resource.data.stockApplied == false
+        )
+        || (
           canApproveInvoices()
-          && resource.data.status == 'pending_approval'
-          && request.resource.data.status in ['approved','rejected']
+          && saleStatus(resource.data) == 'pending_approval'
           && resource.data.createdBy != request.auth.uid
+          && (
+            (
+              request.resource.data.status == 'approved'
+              && request.resource.data.approvedBy == request.auth.uid
+              && request.resource.data.reviewedBy == request.auth.uid
+              && request.resource.data.dispatchEligible == true
+              && request.resource.data.stockApplied == true
+            )
+            || (
+              request.resource.data.status == 'rejected'
+              && request.resource.data.reviewedBy == request.auth.uid
+              && request.resource.data.dispatchEligible == false
+            )
+          )
         )
         || (
           canControlInvoices()
-          && resource.data.status != 'cancelled'
+          && saleStatus(resource.data) != 'cancelled'
           && request.resource.data.status == 'cancelled'
-          && request.resource.data.cancellationReason is string
-          && request.resource.data.cancellationReason.size() > 0
+          && request.resource.data.cancelledBy == request.auth.uid
+          && request.resource.data.dispatchEligible == false
+          && request.resource.data.stockApplied == false
+          && validCancellationReason()
         )
         || (
           (isRecovery() || isAdmin())
@@ -119,20 +187,70 @@ service cloud.firestore {
     match /payments/{paymentId} {
       allow read: if isManagement() || isRecovery()
         || (isSalesman() && resource.data.salesmanId == request.auth.uid);
-      allow create: if isAdmin() || isMarketingDirector() || isRecovery()
-        || (isSalesman()
-          && request.resource.data.salesmanId == request.auth.uid
-          && saleBelongsToMe(request.resource.data.saleId)
-          && saleDoc(request.resource.data.saleId).data.status == 'approved');
-      allow update: if isAdmin() || isERPManager() || isMarketingDirector();
+
+      allow create: if isAdmin() || isMarketingDirector() || isRecovery();
+
+      allow update: if
+        (isMarketingDirector() || isERPManager())
+        && request.resource.data.diff(resource.data).affectedKeys()
+           .hasOnly(['reversed','reversedBy','reversedAt','reversalReason'])
+        && request.resource.data.reversed == true
+        && request.resource.data.reversedBy == request.auth.uid
+        && request.resource.data.reversalReason is string
+        && request.resource.data.reversalReason.size() > 0;
+
       allow delete: if false;
     }
 
     match /ledgerEntries/{entryId} {
       allow read: if isManagement() || isRecovery()
         || (isSalesman() && resource.data.salesmanId == request.auth.uid);
-      allow create: if activeUser()
-        && request.resource.data.createdBy == request.auth.uid;
+
+      allow create: if
+        activeUser()
+        && request.resource.data.createdBy == request.auth.uid
+        && (
+          (
+            request.resource.data.entryType == 'opening_balance'
+            && (
+              isAdmin()
+              || isERPManager()
+              || (
+                isSalesman()
+                && customerAfter(request.resource.data.sourceId).data.createdBy == request.auth.uid
+                && customerAfter(request.resource.data.sourceId).data.assignedSalesmanId == request.auth.uid
+              )
+            )
+          )
+          || (
+            request.resource.data.entryType in ['credit_sale','cash_sale','discount']
+            && isMarketingDirector()
+            && saleStatus(saleAfter(request.resource.data.sourceId).data) == 'approved'
+            && saleAfter(request.resource.data.sourceId).data.approvedBy == request.auth.uid
+          )
+          || (
+            request.resource.data.entryType == 'payment_received'
+            && (isAdmin() || isMarketingDirector() || isRecovery())
+            && paymentAfter(request.resource.data.sourceId).data.enteredBy == request.auth.uid
+          )
+          || (
+            request.resource.data.entryType == 'invoice_cancel_reversal'
+            && canControlInvoices()
+            && saleStatus(saleAfter(request.resource.data.sourceId).data) == 'cancelled'
+            && saleAfter(request.resource.data.sourceId).data.cancelledBy == request.auth.uid
+          )
+          || (
+            request.resource.data.entryType == 'payment_reversal'
+            && canControlInvoices()
+            && paymentAfter(request.resource.data.sourceId).data.reversed == true
+            && paymentAfter(request.resource.data.sourceId).data.reversedBy == request.auth.uid
+          )
+          || (
+            request.resource.data.entryType in ['debit_note','credit_note','sales_return','approved_adjustment_debit','approved_adjustment_credit']
+            && isManagement()
+          )
+        );
+
       allow update, delete: if false;
     }
 
@@ -143,22 +261,49 @@ service cloud.firestore {
     }
 
     match /expenses/{expenseId} {
-      allow read: if isAdmin() || isERPManager() || isMarketingDirector();
-      allow create: if isAdmin() || isERPManager() || isMarketingDirector();
-      allow update: if isAdmin() || isERPManager() || isMarketingDirector();
+      allow read: if canManageExpenses();
+
+      allow create: if canManageExpenses()
+        && request.resource.data.enteredBy == request.auth.uid
+        && request.resource.data.status in ['draft','pending_approval'];
+
+      allow update: if canManageExpenses()
+        && (
+          (
+            expenseStatus(resource.data) in ['draft','rejected']
+            && request.resource.data.status in ['draft','pending_approval']
+          )
+          || (
+            expenseStatus(resource.data) == 'pending_approval'
+            && request.resource.data.status in ['approved','rejected']
+            && (
+              request.resource.data.status != 'approved'
+              || request.resource.data.approvedBy == request.auth.uid
+            )
+          )
+          || (
+            expenseStatus(resource.data) != 'cancelled'
+            && request.resource.data.status == 'cancelled'
+            && request.resource.data.cancelledBy == request.auth.uid
+            && request.resource.data.cancellationReason is string
+            && request.resource.data.cancellationReason.size() > 0
+          )
+        );
+
       allow delete: if false;
     }
 
     match /cashBankAccounts/{accountId} {
-      allow read: if isAdmin() || isERPManager() || isMarketingDirector();
-      allow create, update: if isAdmin() || isERPManager() || isMarketingDirector();
+      allow read: if canManageExpenses();
+      allow create, update: if canManageExpenses();
       allow delete: if false;
     }
 
     match /auditTrail/{auditId} {
       allow read: if isAdmin() || isERPManager();
       allow create: if activeUser()
-        && request.resource.data.actorId == request.auth.uid;
+        && request.resource.data.actorId == request.auth.uid
+        && request.resource.data.actorRole == userDoc().data.role;
       allow update, delete: if false;
     }
 
@@ -169,9 +314,22 @@ service cloud.firestore {
 
     match /counters/{counterId} {
       allow read: if activeUser();
-      allow create, update: if isAdmin() || isERPManager()
-        || (isSalesman() && counterId in ['invoice','customer'])
-        || ((isMarketingDirector()) && counterId == 'expense');
+
+      allow create: if
+        isAdmin()
+        || isERPManager()
+        || (isSalesman() && counterId in ['invoice','customer'] && request.resource.data.next == 2)
+        || (isMarketingDirector() && counterId == 'expense' && request.resource.data.next == 2);
+
+      allow update: if
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['next'])
+        && request.resource.data.next == resource.data.next + 1
+        && (
+          (counterId == 'invoice' && (isAdmin() || isSalesman()))
+          || (counterId == 'customer' && (isAdmin() || isERPManager() || isSalesman()))
+          || (counterId == 'expense' && canManageExpenses())
+        );
+
       allow delete: if false;
     }
   }
