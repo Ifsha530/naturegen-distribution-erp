@@ -268,41 +268,38 @@ function openSaleForm(){
 
 async function saveSale(e){
   e.preventDefault();
+  const action=e.submitter?.dataset.action||'submit';
+  const status=action==='draft'?'draft':'pending_approval';
   const salesmanId=$('#saleSalesman').value, customerId=$('#saleCustomer').value;
   if(!salesmanId||!customerId) return toast('Select salesman and customer.',true);
   if(can('salesman') && salesmanId!==state.user.uid) return toast('Salesman mismatch.',true);
-  const items=[];
+  const items=[]; let exceptionalFree=false;
   $$('.sale-line').forEach(row=>{
-    const p=state.products.find(x=>x.id===row.dataset.product), paidQty=Math.max(0,Math.floor(Number(row.querySelector('.line-qty').value||0))), unitPrice=Math.max(0,Number(row.querySelector('.line-price').value||0));
-    if(p && paidQty>0){ const freeQty=Number(p.schemeBuy||0)>0?Math.floor(paidQty/Number(p.schemeBuy))*Number(p.schemeFree||0):0; items.push({productId:p.id,sku:p.sku||'',name:p.name,paidQty,freeQty,issuedQty:paidQty+freeQty,unitPrice,lineTotal:paidQty*unitPrice,costPrice:Number(p.costPrice||0),mrp:Number(p.mrp||0)}); }
+    const p=state.products.find(x=>x.id===row.dataset.product), paidQty=Math.max(0,Math.floor(Number(row.querySelector('.line-qty').value||0))), freeQty=Math.max(0,Math.floor(Number(row.querySelector('.line-free').value||0))), unitPrice=Math.max(0,Number(row.querySelector('.line-price').value||0));
+    if(p && (paidQty>0||freeQty>0)){
+      const schemeFreeLimit=Number(p.schemeBuy||0)>0?Math.floor(paidQty/Number(p.schemeBuy))*Number(p.schemeFree||0):0;
+      if(freeQty>schemeFreeLimit) exceptionalFree=true;
+      items.push({productId:p.id,sku:p.sku||'',name:p.name,paidQty,freeQty,issuedQty:paidQty+freeQty,schemeFreeLimit,complimentaryAddedBy:freeQty>0?state.user.uid:null,unitPrice,lineTotal:paidQty*unitPrice,costPrice:Number(p.costPrice||0),mrp:Number(p.mrp||0)});
+    }
   });
-  if(!items.length) return toast('Enter at least one product quantity.',true);
-  const gross=items.reduce((a,i)=>a+i.lineTotal,0), discount=Math.max(0,Number($('#saleDiscount').value||0)), total=Math.max(0,gross-discount), paidNow=Math.max(0,Number($('#salePaid').value||0));
-  if(paidNow>total+0.001) return toast('Received amount cannot exceed invoice total.',true);
-  const saleRef=doc(collection(db,'sales')); const counterRef=doc(db,'counters','invoice'); const paymentRef=paidNow>0?doc(collection(db,'payments')):null;
-  const productRefs=items.map(i=>doc(db,'products',i.productId));
+  if(!items.length) return toast('Enter at least one paid or complimentary quantity.',true);
+  if(items.some(i=>i.issuedQty>Number(state.products.find(p=>p.id===i.productId)?.stockQty||0))) return toast('One or more lines exceed currently available stock.',true);
+  const gross=items.reduce((a,i)=>a+i.lineTotal,0), discount=Math.max(0,Number($('#saleDiscount').value||0)), total=Math.max(0,gross-discount), proposedPaidAmount=Math.max(0,Number($('#salePaid').value||0));
+  if(proposedPaidAmount>total+0.001) return toast('Proposed received amount cannot exceed invoice total.',true);
+  const saleRef=doc(collection(db,'sales')), counterRef=doc(db,'counters','invoice'), customerRef=doc(db,'customers',customerId);
   try{
     const result=await runTransaction(db,async tx=>{
-      const productSnaps=[]; for(const ref of productRefs) productSnaps.push(await tx.get(ref));
-      const counterSnap=await tx.get(counterRef);
+      const counterSnap=await tx.get(counterRef), customerSnap=await tx.get(customerRef);
+      if(!customerSnap.exists()||customerSnap.data().active===false) throw new Error('Customer is inactive or missing.');
       let next=counterSnap.exists()?Number(counterSnap.data().next||1):1;
-      const invoiceNo=`NG-${String(next).padStart(6,'0')}`;
-      const now=Timestamp.now();
-      productSnaps.forEach((snap,idx)=>{
-        if(!snap.exists()) throw new Error(`Product not found: ${items[idx].name}`);
-        const p=snap.data(), need=Number(items[idx].issuedQty), old=Number(p.stockQty||0); if(old<need) throw new Error(`${p.name}: only ${old} in stock, ${need} required including free quantity.`);
-        tx.update(productRefs[idx],{stockQty:old-need,updatedAt:now});
-        const mref=doc(collection(db,'stockMovements'));
-        tx.set(mref,{productId:items[idx].productId,productName:items[idx].name,movementType:'sale',qtyChange:-need,balanceAfter:old-need,refType:'sale',refId:saleRef.id,notes:`Invoice ${invoiceNo}`,enteredBy:state.user.uid,createdAt:now});
-      });
+      const invoiceNo=`NG-${String(next).padStart(6,'0')}`, now=Timestamp.now(), customer=customerSnap.data(), saleTs=tsFromInput($('#saleDate').value);
       tx.set(counterRef,{next:next+1},{merge:true});
-      const sale={invoiceNo,saleDate:tsFromInput($('#saleDate').value),customerId,salesmanId,items,subtotal:gross,discount,total,paidAmount:paidNow,paymentStatus:calcStatus(total,paidNow),notes:$('#saleNotes').value.trim()||'',createdBy:state.user.uid,createdAt:now,updatedAt:now};
-      tx.set(saleRef,sale);
-      if(paymentRef) tx.set(paymentRef,{saleId:saleRef.id,invoiceNo,customerId,salesmanId,amount:paidNow,method:'cash',reference:'',notes:'Received with sale',paymentDate:now,enteredBy:state.user.uid,createdAt:now});
-      return {invoiceNo};
+      tx.set(saleRef,{invoiceNo,saleDate:saleTs,customerId,salesmanId,items,subtotal:gross,discount,total,proposedPaidAmount,paymentMethod:$('#salePaymentMethod').value,paidAmount:0,paymentStatus:calcStatus(total,0),status,dispatchEligible:false,stockApplied:false,exceptionalFreeRequired:exceptionalFree,notes:$('#saleNotes').value.trim()||'',dueDate:dueDateFor(customer,saleTs),createdBy:state.user.uid,creatorName:state.me?.fullName||'',createdAt:now,submittedAt:status==='pending_approval'?now:null,updatedAt:now});
+      auditSet(tx,status==='draft'?'invoice_draft_created':'invoice_submitted','invoice',saleRef.id,{invoiceNo,total,customerId,salesmanId,exceptionalFree});
+      return {invoiceNo,status};
     });
-    closeModal(); toast(`Sale saved: ${result.invoiceNo}`);
-  }catch(err){ console.error(err); toast(err.message||'Sale could not be saved.',true); }
+    closeModal(); toast(result.status==='draft'?`Draft saved: ${result.invoiceNo}`:`Submitted for approval: ${result.invoiceNo}`);
+  }catch(err){ console.error(err); toast(err.message||'Invoice could not be saved.',true); }
 }
 
 function openInvoice(id){
