@@ -70,16 +70,36 @@ service cloud.firestore {
       allow read: if isManagement() || isInventory() || isRecovery()
         || (isSalesman() && resource.data.assignedSalesmanId == request.auth.uid);
 
-      allow create: if isAdmin() || isERPManager()
-        || (isSalesman()
+      allow create: if
+        (
+          (isAdmin() || isERPManager())
+          && request.resource.data.get('complimentarySchemeEligible', false) == false
+        )
+        || (
+          isSalesman()
           && request.resource.data.assignedSalesmanId == request.auth.uid
           && request.resource.data.createdBy == request.auth.uid
           && request.resource.data.active == true
-          && request.resource.data.get('complimentarySchemeEligible', false) == false);
+          && request.resource.data.get('complimentarySchemeEligible', false) == false
+        );
 
       allow update: if
         (
-          (isMarketingDirector() || isERPManager())
+          isMarketingDirector()
+          && (
+            request.resource.data.get('active', true) == resource.data.get('active', true)
+            || (
+              resource.data.get('active', true) == true
+              && request.resource.data.get('active', true) == false
+              && request.resource.data.deactivationReason is string
+              && request.resource.data.deactivationReason.size() > 0
+              && request.resource.data.deactivatedBy == request.auth.uid
+            )
+          )
+        )
+        || (
+          isERPManager()
+          && request.resource.data.get('complimentarySchemeEligible', false) == resource.data.get('complimentarySchemeEligible', false)
           && (
             request.resource.data.get('active', true) == resource.data.get('active', true)
             || (
@@ -94,6 +114,7 @@ service cloud.firestore {
         || (
           isAdmin()
           && request.resource.data.get('active', true) == resource.data.get('active', true)
+          && request.resource.data.get('complimentarySchemeEligible', false) == resource.data.get('complimentarySchemeEligible', false)
         )
         || (
           isSalesman()
