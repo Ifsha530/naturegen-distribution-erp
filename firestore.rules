@@ -2,113 +2,177 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
+    function userDoc() { return get(/databases/$(database)/documents/users/$(request.auth.uid)); }
     function activeUser() {
       return signedIn()
         && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.active == true;
+        && userDoc().data.active == true;
     }
-    function isAdmin() {
-      return activeUser()
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
-    }
-    function isInventory() {
-      return activeUser()
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'inventory';
-    }
-    function isSalesman() {
-      return activeUser()
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'salesman';
-    }
-    function isRecovery() {
-      return activeUser()
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'recovery';
-    }
+    function roleIs(r) { return activeUser() && userDoc().data.role == r; }
+    function isAdmin() { return roleIs('admin'); }
+    function isSalesman() { return roleIs('salesman'); }
+    function isInventory() { return roleIs('inventory'); }
+    function isRecovery() { return roleIs('recovery'); }
+    function isMarketingDirector() { return roleIs('marketing_director'); }
+    function isERPManager() { return roleIs('erp_manager'); }
+    function isManagement() { return isAdmin() || isMarketingDirector() || isERPManager(); }
+    function canApproveInvoices() { return isAdmin() || isMarketingDirector(); }
+    function canControlInvoices() { return isAdmin() || isMarketingDirector() || isERPManager(); }
+    function saleDoc(saleId) { return get(/databases/$(database)/documents/sales/$(saleId)); }
     function saleBelongsToMe(saleId) {
-      return getAfter(/databases/$(database)/documents/sales/$(saleId)).data.salesmanId == request.auth.uid;
+      return saleDoc(saleId).data.salesmanId == request.auth.uid;
     }
     function validPaymentUpdate() {
-      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['paidAmount','paymentStatus','updatedAt'])
+      return resource.data.status == 'approved'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['paidAmount','paymentStatus','updatedAt'])
         && request.resource.data.paidAmount >= resource.data.paidAmount
         && request.resource.data.paidAmount <= resource.data.total;
     }
 
     match /users/{uid} {
       allow read: if activeUser();
-      allow create, update, delete: if isAdmin();
+      allow create, update: if isAdmin() || isERPManager();
+      allow delete: if false;
     }
 
     match /products/{productId} {
       allow read: if activeUser();
-      allow create, delete: if isAdmin();
-      allow update: if isAdmin() || isInventory() ||
-        (isSalesman()
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stockQty','updatedAt'])
-          && request.resource.data.stockQty >= 0
-          && request.resource.data.stockQty <= resource.data.stockQty);
+      allow create: if isAdmin() || isERPManager();
+      allow update: if isAdmin() || isERPManager() || isInventory() || isMarketingDirector();
+      allow delete: if false;
+    }
+
+    match /customerIndex/{indexId} {
+      allow read: if activeUser();
+      allow create: if isAdmin() || isERPManager()
+        || (isSalesman()
+          && request.resource.data.createdBy == request.auth.uid
+          && getAfter(/databases/$(database)/documents/customers/$(request.resource.data.customerId)).data.assignedSalesmanId == request.auth.uid);
+      allow update: if isAdmin() || isERPManager() || isMarketingDirector();
+      allow delete: if false;
     }
 
     match /customers/{customerId} {
-      allow read: if isAdmin() || isInventory() || isRecovery() ||
-        (isSalesman() && resource.data.assignedSalesmanId == request.auth.uid);
-      allow create: if isAdmin() ||
-        (isSalesman() && request.resource.data.assignedSalesmanId == request.auth.uid);
-      allow update: if isAdmin() ||
-        (isSalesman()
+      allow read: if isManagement() || isInventory() || isRecovery()
+        || (isSalesman() && resource.data.assignedSalesmanId == request.auth.uid);
+      allow create: if isAdmin() || isERPManager()
+        || (isSalesman()
+          && request.resource.data.assignedSalesmanId == request.auth.uid
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.active == true);
+      allow update: if isManagement()
+        || (isSalesman()
           && resource.data.assignedSalesmanId == request.auth.uid
-          && request.resource.data.assignedSalesmanId == request.auth.uid);
-      allow delete: if isAdmin();
+          && request.resource.data.assignedSalesmanId == request.auth.uid
+          && request.resource.data.active == resource.data.active
+          && request.resource.data.customerCode == resource.data.customerCode
+          && request.resource.data.currentBalance == resource.data.currentBalance
+          && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['address','routeArea','territory','creditLimit','creditDays','updatedAt']));
+      allow delete: if false;
     }
 
     match /sales/{saleId} {
-      allow read: if isAdmin() || isInventory() || isRecovery() ||
-        (isSalesman() && resource.data.salesmanId == request.auth.uid);
-      allow create: if isAdmin() ||
-        (isSalesman()
+      allow read: if isManagement() || isInventory() || isRecovery()
+        || (isSalesman() && resource.data.salesmanId == request.auth.uid);
+
+      allow create: if isAdmin()
+        || (isSalesman()
           && request.resource.data.salesmanId == request.auth.uid
-          && request.resource.data.createdBy == request.auth.uid);
-      allow update: if isAdmin() ||
-        ((isRecovery() || (isSalesman() && resource.data.salesmanId == request.auth.uid))
-          && validPaymentUpdate());
-      allow delete: if isAdmin();
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.status in ['draft','pending_approval']
+          && request.resource.data.dispatchEligible == false
+          && request.resource.data.stockApplied == false);
+
+      allow update: if
+        isAdmin()
+        || (
+          isSalesman()
+          && resource.data.salesmanId == request.auth.uid
+          && resource.data.createdBy == request.auth.uid
+          && resource.data.status == 'draft'
+          && request.resource.data.status in ['draft','pending_approval']
+          && request.resource.data.dispatchEligible == false
+          && request.resource.data.stockApplied == false
+        )
+        || (
+          canApproveInvoices()
+          && resource.data.status == 'pending_approval'
+          && request.resource.data.status in ['approved','rejected']
+          && resource.data.createdBy != request.auth.uid
+        )
+        || (
+          canControlInvoices()
+          && resource.data.status != 'cancelled'
+          && request.resource.data.status == 'cancelled'
+          && request.resource.data.cancellationReason is string
+          && request.resource.data.cancellationReason.size() > 0
+        )
+        || (
+          (isRecovery() || isAdmin())
+          && validPaymentUpdate()
+        );
+
+      allow delete: if false;
     }
 
     match /payments/{paymentId} {
-      allow read: if isAdmin() || isRecovery() ||
-        (isSalesman() && resource.data.salesmanId == request.auth.uid);
-      allow create: if isAdmin() || isRecovery() ||
-        (isSalesman()
+      allow read: if isManagement() || isRecovery()
+        || (isSalesman() && resource.data.salesmanId == request.auth.uid);
+      allow create: if isAdmin() || isMarketingDirector() || isRecovery()
+        || (isSalesman()
           && request.resource.data.salesmanId == request.auth.uid
-          && saleBelongsToMe(request.resource.data.saleId));
-      allow update, delete: if isAdmin();
+          && saleBelongsToMe(request.resource.data.saleId)
+          && saleDoc(request.resource.data.saleId).data.status == 'approved');
+      allow update: if isAdmin() || isERPManager() || isMarketingDirector();
+      allow delete: if false;
+    }
+
+    match /ledgerEntries/{entryId} {
+      allow read: if isManagement() || isRecovery()
+        || (isSalesman() && resource.data.salesmanId == request.auth.uid);
+      allow create: if activeUser()
+        && request.resource.data.createdBy == request.auth.uid;
+      allow update, delete: if false;
     }
 
     match /stockMovements/{movementId} {
-      allow read: if isAdmin() || isInventory();
-      allow create: if isAdmin() || isInventory() ||
-        (isSalesman()
-          && request.resource.data.enteredBy == request.auth.uid
-          && request.resource.data.movementType == 'sale'
-          && request.resource.data.qtyChange < 0);
-      allow update, delete: if isAdmin();
+      allow read: if isAdmin() || isERPManager() || isInventory() || isMarketingDirector();
+      allow create: if isAdmin() || isERPManager() || isInventory() || isMarketingDirector();
+      allow update, delete: if false;
     }
 
     match /expenses/{expenseId} {
-      allow read, create, update, delete: if isAdmin();
+      allow read: if isAdmin() || isERPManager() || isMarketingDirector();
+      allow create: if isAdmin() || isERPManager() || isMarketingDirector();
+      allow update: if isAdmin() || isERPManager() || isMarketingDirector();
+      allow delete: if false;
+    }
+
+    match /cashBankAccounts/{accountId} {
+      allow read: if isAdmin() || isERPManager() || isMarketingDirector();
+      allow create, update: if isAdmin() || isERPManager() || isMarketingDirector();
+      allow delete: if false;
+    }
+
+    match /auditTrail/{auditId} {
+      allow read: if isAdmin() || isERPManager();
+      allow create: if activeUser()
+        && request.resource.data.actorId == request.auth.uid;
+      allow update, delete: if false;
     }
 
     match /settings/{settingId} {
       allow read: if activeUser();
-      allow write: if isAdmin();
+      allow write: if isAdmin() || isERPManager();
     }
 
     match /counters/{counterId} {
-      allow read: if isAdmin() || isSalesman();
-      allow create: if isAdmin();
-      allow update: if isAdmin() ||
-        (isSalesman()
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['next'])
-          && request.resource.data.next == resource.data.next + 1);
-      allow delete: if isAdmin();
+      allow read: if activeUser();
+      allow create, update: if isAdmin() || isERPManager()
+        || (isSalesman() && counterId in ['invoice','customer'])
+        || ((isMarketingDirector()) && counterId == 'expense');
+      allow delete: if false;
     }
   }
 }
