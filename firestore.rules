@@ -117,6 +117,16 @@ service cloud.firestore {
           && request.resource.data.get('complimentarySchemeEligible', false) == resource.data.get('complimentarySchemeEligible', false)
         )
         || (
+          isRecovery()
+          && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['currentBalance','lastPaymentId','lastPaymentAt','updatedAt'])
+          && request.resource.data.currentBalance <= resource.data.get('currentBalance', 0)
+          && paymentAfter(request.resource.data.lastPaymentId).data.customerId == customerId
+          && paymentAfter(request.resource.data.lastPaymentId).data.enteredBy == request.auth.uid
+          && paymentAfter(request.resource.data.lastPaymentId).data.amount
+             == resource.data.get('currentBalance', 0) - request.resource.data.currentBalance
+        )
+        || (
           isSalesman()
           && resource.data.assignedSalesmanId == request.auth.uid
           && request.resource.data.assignedSalesmanId == request.auth.uid
@@ -209,7 +219,13 @@ service cloud.firestore {
       allow read: if isManagement() || isRecovery()
         || (isSalesman() && resource.data.salesmanId == request.auth.uid);
 
-      allow create: if isAdmin() || isMarketingDirector() || isRecovery();
+      allow create: if
+        (isAdmin() || isMarketingDirector() || isRecovery())
+        && request.resource.data.enteredBy == request.auth.uid
+        && request.resource.data.amount > 0
+        && saleStatus(saleAfter(request.resource.data.saleId).data) == 'approved'
+        && request.resource.data.customerId == saleAfter(request.resource.data.saleId).data.customerId
+        && request.resource.data.salesmanId == saleAfter(request.resource.data.saleId).data.salesmanId;
 
       allow update: if
         (isMarketingDirector() || isERPManager())
