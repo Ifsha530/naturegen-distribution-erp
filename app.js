@@ -87,7 +87,7 @@ function normalizeKey(v=''){ return String(v).trim().toLowerCase().replace(/\s+/
 function idxId(prefix,v=''){ return `${prefix}:${encodeURIComponent(normalizeKey(v))}`; }
 function ledgerEntry(tx,data){
   const ref=doc(collection(db,'ledgerEntries'));
-  tx.set(ref,{...data,createdAt:Timestamp.now(),createdBy:state.user.uid});
+  tx.set(ref,{...data,documentId:data.documentId||ref.id,createdAt:Timestamp.now(),createdBy:state.user.uid});
   return ref;
 }
 function ledgerRowsForCustomer(customerId){
@@ -100,7 +100,7 @@ function ledgerRowsForCustomer(customerId){
   }
   state.sales.filter(s=>s.customerId===customerId && invoiceStatus(s)==='approved').forEach(s=>{
     const key=`sale:${s.id}:invoice`; if(!sourceKeys.has(key)){
-      extra.push({id:`legacy-sale-${s.id}`,customerId,entryType:'credit_sale',sourceType:'sale',sourceId:s.id,documentType:'invoice',documentId:s.id,documentNo:s.invoiceNo,invoiceNo:s.invoiceNo,transactionDate:s.saleDate,debit:Number(s.total||0),credit:0,paymentStatus:s.paymentStatus,dueDate:s.dueDate||dueDateFor(cust,s.saleDate),notes:'Approved invoice'});
+      extra.push({id:`legacy-sale-${s.id}`,customerId,entryType:'credit_sale',sourceType:'sale',sourceId:s.id,documentType:'invoice',documentId:s.id,documentNo:s.invoiceNo,invoiceNo:s.invoiceNo,transactionDate:s.saleDate,debit:Number(s.total||0),credit:0,paidUnits:(s.items||[]).reduce((a,i)=>a+Number(i.paidQty||0),0),complimentaryUnits:(s.items||[]).reduce((a,i)=>a+Number(i.freeQty||0),0),totalDeliveredUnits:(s.items||[]).reduce((a,i)=>a+Number(i.issuedQty||0),0),paymentStatus:s.paymentStatus,dueDate:s.dueDate||dueDateFor(cust,s.saleDate),notes:'Approved invoice'});
       if(Number(s.paidAmount||0)>0) extra.push({id:`legacy-pay-${s.id}`,customerId,entryType:'payment_received',sourceType:'legacy_payment',sourceId:s.id,documentType:'receipt',documentId:s.id,documentNo:`${s.invoiceNo}-PAY`,invoiceNo:s.invoiceNo,transactionDate:s.saleDate,debit:0,credit:Number(s.paidAmount||0),notes:'Legacy recorded payment'});
     }
   });
@@ -334,7 +334,7 @@ async function approveInvoice(id){
       const initialPaid=Math.min(Number(s.proposedPaidAmount||0),Number(s.total||0));
       const customer=customerSnap.data(), base=Number.isFinite(Number(customer.currentBalance))?Number(customer.currentBalance):fallbackBalance;
       tx.update(customerRef,{currentBalance:base+Number(s.total||0)-initialPaid,updatedAt:now});
-      ledgerEntry(tx,{customerId:s.customerId,salesmanId:s.salesmanId,entryType:initialPaid>=Number(s.total||0)&&Number(s.total||0)>0?'cash_sale':'credit_sale',sourceType:'sale',sourceId:id,documentType:'invoice',documentId:id,documentNo:s.invoiceNo,invoiceNo:s.invoiceNo,transactionDate:s.saleDate,debit:Number(s.subtotal||s.total||0),credit:0,paymentStatus:calcStatus(s.total,initialPaid),dueDate:s.dueDate||dueDateFor(customer,s.saleDate),notes:'Approved sales invoice'});
+      ledgerEntry(tx,{customerId:s.customerId,salesmanId:s.salesmanId,entryType:initialPaid>=Number(s.total||0)&&Number(s.total||0)>0?'cash_sale':'credit_sale',sourceType:'sale',sourceId:id,documentType:'invoice',documentId:id,documentNo:s.invoiceNo,invoiceNo:s.invoiceNo,transactionDate:s.saleDate,debit:Number(s.subtotal||s.total||0),credit:0,paidUnits:(s.items||[]).reduce((a,i)=>a+Number(i.paidQty||0),0),complimentaryUnits:(s.items||[]).reduce((a,i)=>a+Number(i.freeQty||0),0),totalDeliveredUnits:(s.items||[]).reduce((a,i)=>a+Number(i.issuedQty||0),0),paymentStatus:calcStatus(s.total,initialPaid),dueDate:s.dueDate||dueDateFor(customer,s.saleDate),notes:'Approved sales invoice'});
       if(Number(s.discount||0)>0) ledgerEntry(tx,{customerId:s.customerId,salesmanId:s.salesmanId,entryType:'discount',sourceType:'sale_discount',sourceId:id,documentType:'invoice',documentId:id,documentNo:s.invoiceNo,invoiceNo:s.invoiceNo,transactionDate:s.saleDate,debit:0,credit:Number(s.discount),notes:'Approved invoice discount'});
       if(initialPaid>0){
         const pRef=doc(collection(db,'payments'));
