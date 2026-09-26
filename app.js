@@ -190,31 +190,11 @@ function showLogin(){ $('#appView').classList.add('hidden'); $('#loginView').cla
 function showApp(){ $('#loginView').classList.add('hidden'); $('#appView').classList.remove('hidden'); }
 
 function renderDashboard(){
-  const start=monthStart(); const sales=accessibleSales().filter(s=>(asDate(s.saleDate)||new Date(0))>=start);
-  const total=sales.reduce((a,s)=>a+Number(s.total||0),0);
-  const collected=sales.reduce((a,s)=>a+Number(s.paidAmount||0),0);
-  const outstanding=accessibleSales().reduce((a,s)=>a+Math.max(0,Number(s.total||0)-Number(s.paidAmount||0)),0);
-  const stock=state.products.reduce((a,p)=>a+Number(p.stockQty||0),0);
-  const low=activeProducts().filter(p=>Number(p.stockQty||0)<=Number(p.lowStockThreshold||0));
+  const start=monthStart(), sales=approvedSales().filter(s=>(asDate(s.saleDate)||new Date(0))>=start);
+  const total=sales.reduce((a,s)=>a+Number(s.total||0),0), collected=sales.reduce((a,s)=>a+Number(s.paidAmount||0),0), outstanding=approvedSales().reduce((a,s)=>a+Math.max(0,Number(s.total||0)-Number(s.paidAmount||0)),0), stock=state.products.reduce((a,p)=>a+Number(p.stockQty||0),0), low=activeProducts().filter(p=>Number(p.stockQty||0)<=Number(p.lowStockThreshold||0)), pending=accessibleSales().filter(s=>invoiceStatus(s)==='pending_approval').length;
   let perf='';
-  if(can('admin')){
-    const reps=state.users.filter(p=>p.role==='salesman'&&p.active!==false);
-    perf=`<div class="section-head"><h3>Salesman Performance — This Month</h3></div><div class="table-wrap"><table class="table"><thead><tr><th>Salesman</th><th>Route</th><th>Invoices</th><th>Sales</th><th>Recovery</th><th>Outstanding</th><th>Target</th><th>Achievement</th></tr></thead><tbody>${reps.map(p=>{
-      const ss=sales.filter(s=>s.salesmanId===p.id), st=ss.reduce((a,s)=>a+Number(s.total||0),0), rec=ss.reduce((a,s)=>a+Number(s.paidAmount||0),0), out=ss.reduce((a,s)=>a+Math.max(0,Number(s.total||0)-Number(s.paidAmount||0)),0), pct=Number(p.monthlyTarget||0)>0?Math.min(100,st/Number(p.monthlyTarget)*100):0;
-      return `<tr><td><b>${esc(p.fullName)}</b></td><td>${esc(p.routeArea||'—')}</td><td>${ss.length}</td><td>${money(st)}</td><td>${money(rec)}</td><td>${money(out)}</td><td>${money(p.monthlyTarget)}</td><td><div>${pct.toFixed(1)}%</div><div class="progress"><span style="width:${pct}%"></span></div></td></tr>`;
-    }).join('')||'<tr><td colspan="8" class="empty">No salesman users yet.</td></tr>'}</tbody></table></div>`;
-  }
-  $('#dashboardPage').innerHTML=`
-    <div class="grid cards">
-      <div class="card stat"><small>${can('salesman')?'My ':''}Sales This Month</small><strong>${money(total)}</strong><div class="sub">${sales.length} invoice(s)</div></div>
-      <div class="card stat"><small>Collected This Month</small><strong>${money(collected)}</strong><div class="sub">Accessible invoices</div></div>
-      <div class="card stat"><small>Outstanding</small><strong>${money(outstanding)}</strong><div class="sub">Current receivables</div></div>
-      <div class="card stat"><small>Total Stock Units</small><strong>${fmt(stock)}</strong><div class="sub">${low.length} low-stock product(s)</div></div>
-    </div>
-    ${low.length?`<div class="section-head"><h3>Low Stock Alerts</h3></div><div class="grid">${low.map(p=>`<div class="card"><b>${esc(p.name)}</b><div class="kpi-line"><span>Available</span><strong>${fmt(p.stockQty)}</strong></div><div class="kpi-line"><span>Alert level</span><span>${fmt(p.lowStockThreshold)}</span></div></div>`).join('')}</div>`:''}
-    ${perf}
-    <div class="section-head"><h3>Recent Invoices</h3></div>${salesTable(accessibleSales().slice(0,8),false)}
-  `;
+  if(can('admin','marketing_director','erp_manager')){const reps=state.users.filter(p=>p.role==='salesman'&&p.active!==false);perf=`<div class="section-head"><h3>Salesman Performance — Approved Sales This Month</h3></div><div class="table-wrap"><table class="table"><thead><tr><th>Salesman</th><th>Route</th><th>Invoices</th><th>Sales</th><th>Recovery</th><th>Outstanding</th><th>Target</th><th>Achievement</th></tr></thead><tbody>${reps.map(p=>{const ss=sales.filter(s=>s.salesmanId===p.id),st=ss.reduce((a,s)=>a+Number(s.total||0),0),rec=ss.reduce((a,s)=>a+Number(s.paidAmount||0),0),out=ss.reduce((a,s)=>a+Math.max(0,Number(s.total||0)-Number(s.paidAmount||0)),0),pct=Number(p.monthlyTarget||0)>0?Math.min(100,st/Number(p.monthlyTarget)*100):0;return `<tr><td><b>${esc(p.fullName)}</b></td><td>${esc(p.routeArea||'—')}</td><td>${ss.length}</td><td>${money(st)}</td><td>${money(rec)}</td><td>${money(out)}</td><td>${money(p.monthlyTarget)}</td><td><div>${pct.toFixed(1)}%</div><div class="progress"><span style="width:${pct}%"></span></div></td></tr>`;}).join('')||'<tr><td colspan="8" class="empty">No salesman users yet.</td></tr>'}</tbody></table></div>`;}
+  $('#dashboardPage').innerHTML=`<div class="grid cards"><div class="card stat"><small>${can('salesman')?'My ':''}Approved Sales This Month</small><strong>${money(total)}</strong><div class="sub">${sales.length} approved invoice(s)</div></div><div class="card stat"><small>Collected This Month</small><strong>${money(collected)}</strong><div class="sub">Approved invoices only</div></div><div class="card stat"><small>Outstanding</small><strong>${money(outstanding)}</strong><div class="sub">Current approved receivables</div></div><div class="card stat"><small>${canApproveInvoice()?'Pending Approval':'Total Stock Units'}</small><strong>${canApproveInvoice()?fmt(pending):fmt(stock)}</strong><div class="sub">${canApproveInvoice()?'Invoices waiting for review':low.length+' low-stock product(s)'}</div></div></div>${low.length?`<div class="section-head"><h3>Low Stock Alerts</h3></div><div class="grid">${low.map(p=>`<div class="card"><b>${esc(p.name)}</b><div class="kpi-line"><span>Available</span><strong>${fmt(p.stockQty)}</strong></div><div class="kpi-line"><span>Alert level</span><span>${fmt(p.lowStockThreshold)}</span></div></div>`).join('')}</div>`:''}${perf}<div class="section-head"><h3>Recent Invoices</h3></div>${salesTable(accessibleSales().slice(0,8),false)}`;
 }
 
 function salesTable(rows,actions=true){
