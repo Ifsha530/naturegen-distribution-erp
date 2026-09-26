@@ -571,25 +571,34 @@ function renderAudit(){
 }
 
 function renderSettings(){
-  if(!can('admin'))return;
+  if(!can('admin','erp_manager'))return;
   const s=state.settings||{}, needsSetup=state.products.length===0;
-  $('#settingsPage').innerHTML=`${needsSetup?`<div class="card setup-card"><h3>Initial Business Setup</h3><p>Products are empty. Create Naturegen's starting products and stock with one click.</p><button id="seedBtn" class="btn primary">Initialize Aimacid + Iron Data</button></div>`:''}<div class="card" style="max-width:760px;margin-top:16px"><h3>Company Settings</h3><form id="settingsForm" class="form-grid"><label>Company Name<input id="setName" value="${esc(s.companyName||'Naturegen Distribution')}"></label><label>Phone<input id="setPhone" value="${esc(s.phone||'')}"></label><label class="full">Address<textarea id="setAddress">${esc(s.address||'')}</textarea></label><label>Monthly Profit Target<input id="setTarget" type="number" min="0" step="0.01" value="${s.monthlyProfitTarget||100000}"></label><div class="full"><button class="btn primary">Save Settings</button></div></form></div>`;
-  if($('#seedBtn')) $('#seedBtn').onclick=seedInitialData;
-  $('#settingsForm').onsubmit=async e=>{e.preventDefault();try{await setDoc(doc(db,'settings','company'),{companyName:$('#setName').value.trim(),phone:$('#setPhone').value.trim(),address:$('#setAddress').value.trim(),monthlyProfitTarget:Number($('#setTarget').value||0),updatedAt:serverTimestamp()},{merge:true});toast('Settings saved.');}catch(err){toast(err.message,true);}};
+  $('#settingsPage').innerHTML=`${needsSetup?`<div class="card setup-card"><h3>Initial Business Setup</h3><p>Products are empty. Create Naturegen's starting products and stock with one click.</p><button id="seedBtn" class="btn primary">Initialize Aimacid + Iron Data</button></div>`:''}<div class="card setup-card" style="margin-top:16px"><h3>Controlled Workflow Setup</h3><p>Ensures invoice/customer/expense counters and a Main Cash account exist without removing existing data.</p><button id="controlSetupBtn" class="btn ghost">Initialize / Repair Control Data</button></div><div class="card" style="max-width:760px;margin-top:16px"><h3>Company Settings</h3><form id="settingsForm" class="form-grid"><label>Company Name<input id="setName" value="${esc(s.companyName||'Naturegen Distribution')}"></label><label>Phone<input id="setPhone" value="${esc(s.phone||'')}"></label><label class="full">Address<textarea id="setAddress">${esc(s.address||'')}</textarea></label><label>Monthly Profit Target<input id="setTarget" type="number" min="0" step="0.01" value="${s.monthlyProfitTarget||100000}"></label><div class="full"><button class="btn primary">Save Settings</button></div></form></div><div class="section-head"><h3>Cash / Bank Accounts</h3><button id="addAccountBtn" class="btn primary">+ Add Account</button></div><div class="table-wrap"><table class="table"><thead><tr><th>Name</th><th>Type</th><th>Balance</th><th>Status</th></tr></thead><tbody>${state.accounts.map(a=>`<tr><td><b>${esc(a.name)}</b></td><td>${esc(a.type||'')}</td><td>${money(a.balance)}</td><td>${a.active!==false?'Active':'Inactive'}</td></tr>`).join('')||'<tr><td colspan="4" class="empty">No accounts yet. Initialize control data to create Main Cash.</td></tr>'}</tbody></table></div>`;
+  if($('#seedBtn')) $('#seedBtn').onclick=seedInitialData; $('#controlSetupBtn').onclick=initializeControlData; $('#addAccountBtn').onclick=openAccountForm;
+  $('#settingsForm').onsubmit=async e=>{e.preventDefault();try{await setDoc(doc(db,'settings','company'),{companyName:$('#setName').value.trim(),phone:$('#setPhone').value.trim(),address:$('#setAddress').value.trim(),monthlyProfitTarget:Number($('#setTarget').value||0),updatedAt:serverTimestamp()},{merge:true});await writeAudit('company_settings_updated','settings','company',{});toast('Settings saved.');}catch(err){toast(err.message,true);}};
+}
+function openAccountForm(){
+  showModal('Add Cash / Bank Account',`<form id="accountForm" class="form-grid"><label>Account Name<input id="accName" required></label><label>Type<select id="accType"><option value="cash">Cash</option><option value="bank">Bank</option><option value="wallet">Wallet</option></select></label><label>Opening Balance<input id="accBalance" type="number" step="0.01" value="0"></label><div class="full"><button class="btn primary">Create Account</button></div></form>`);
+  $('#accountForm').onsubmit=async e=>{e.preventDefault();try{const ref=doc(collection(db,'cashBankAccounts')),now=Timestamp.now();await setDoc(ref,{name:$('#accName').value.trim(),type:$('#accType').value,balance:Number($('#accBalance').value||0),active:true,createdBy:state.user.uid,createdAt:now,updatedAt:now});await writeAudit('cash_bank_account_created','account',ref.id,{name:$('#accName').value.trim(),type:$('#accType').value,openingBalance:Number($('#accBalance').value||0)});closeModal();toast('Account created.');}catch(err){toast(err.message,true);}};
+}
+async function initializeControlData(){
+  if(!can('admin','erp_manager'))return;
+  try{const batch=writeBatch(db),now=serverTimestamp();batch.set(doc(db,'counters','invoice'),{next:1},{merge:true});batch.set(doc(db,'counters','customer'),{next:1},{merge:true});batch.set(doc(db,'counters','expense'),{next:1},{merge:true});batch.set(doc(db,'cashBankAccounts','cash-main'),{name:'Main Cash',type:'cash',balance:0,active:true,updatedAt:now},{merge:true});await batch.commit();await writeAudit('control_data_initialized','settings','controls',{});toast('Control data initialized without removing existing records.');}catch(err){toast(err.message,true);}
 }
 async function seedInitialData(){
-  if(!can('admin'))return;
+  if(!can('admin','erp_manager'))return;
   if(state.products.length) return toast('Products already exist; setup was not repeated.',true);
   const batch=writeBatch(db), now=serverTimestamp();
   const p1=doc(collection(db,'products')),p2=doc(collection(db,'products'));
   batch.set(p1,{sku:'AIMACID-120',name:'Aimacid Syrup 120 ml',mrp:190,salePrice:65,costPrice:35,stockQty:10400,lowStockThreshold:500,schemeBuy:10,schemeFree:1,active:true,createdAt:now,updatedAt:now});
   batch.set(p2,{sku:'IRON-120',name:'Iron Syrup 120 ml',mrp:0,salePrice:90,costPrice:35,stockQty:2600,lowStockThreshold:200,schemeBuy:10,schemeFree:1,active:true,createdAt:now,updatedAt:now});
-  batch.set(doc(db,'counters','invoice'),{next:1},{merge:true});
+  batch.set(doc(db,'counters','invoice'),{next:1},{merge:true});batch.set(doc(db,'counters','customer'),{next:1},{merge:true});batch.set(doc(db,'counters','expense'),{next:1},{merge:true});
+  batch.set(doc(db,'cashBankAccounts','cash-main'),{name:'Main Cash',type:'cash',balance:0,active:true,updatedAt:now},{merge:true});
   batch.set(doc(db,'settings','company'),{companyName:'Naturegen Distribution',monthlyProfitTarget:100000,updatedAt:now},{merge:true});
   const m1=doc(collection(db,'stockMovements')),m2=doc(collection(db,'stockMovements'));
   batch.set(m1,{productId:p1.id,productName:'Aimacid Syrup 120 ml',movementType:'opening',qtyChange:10400,balanceAfter:10400,refType:'opening',refId:'',notes:'Initial opening stock',enteredBy:state.user.uid,createdAt:now});
   batch.set(m2,{productId:p2.id,productName:'Iron Syrup 120 ml',movementType:'opening',qtyChange:2600,balanceAfter:2600,refType:'opening',refId:'',notes:'Initial opening stock',enteredBy:state.user.uid,createdAt:now});
-  try{await batch.commit();toast('Initial Naturegen data created.');}catch(err){toast(err.message,true);}
+  try{await batch.commit();await writeAudit('initial_business_data_created','settings','initial',{products:['Aimacid Syrup 120 ml','Iron Syrup 120 ml']});toast('Initial Naturegen data created.');}catch(err){toast(err.message,true);}
 }
 
 async function init(){
