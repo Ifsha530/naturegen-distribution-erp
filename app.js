@@ -40,7 +40,7 @@ const sortAscText = (rows, field) => [...rows].sort((a,b)=>String(a[field]||'').
 
 const state = {
   user:null, me:null, page:'dashboard',
-  products:[], customers:[], users:[], sales:[], payments:[], expenses:[], movements:[], settings:null,
+  products:[], customers:[], users:[], sales:[], payments:[], expenses:[], movements:[], ledgerEntries:[], auditTrail:[], accounts:[], settings:null,
   unsubs:[], liveReady:false
 };
 
@@ -57,15 +57,67 @@ function customerName(id){ return state.customers.find(x=>x.id===id)?.shopName |
 function productName(id){ return state.products.find(x=>x.id===id)?.name || '—'; }
 function setSync(text){ $('#syncStatus').textContent=text; }
 function badgeStatus(s){ const cls=s==='paid'?'ok':s==='partial'?'warn':'danger'; return `<span class="badge ${cls}">${esc(s||'unpaid')}</span>`; }
+function invoiceStatus(s){ return s?.status || 'approved'; }
+function statusBadge(s){ const v=invoiceStatus(s); return `<span class="badge status-${esc(v)}">${esc(v.replaceAll('_',' '))}</span>`; }
 function activeProducts(){ return state.products.filter(p=>p.active!==false); }
 function accessibleSales(){ return state.sales; }
+function approvedSales(){ return state.sales.filter(s=>invoiceStatus(s)==='approved'); }
 function calcStatus(total, paid){ return Number(paid||0) >= Number(total||0)-0.001 ? 'paid' : Number(paid||0)>0 ? 'partial' : 'unpaid'; }
+function isManagement(){ return can('admin','marketing_director','erp_manager'); }
+function canApproveInvoice(){ return can('admin','marketing_director'); }
+function canControlInvoice(){ return can('admin','marketing_director','erp_manager'); }
+function canManageCustomers(){ return can('admin','marketing_director','erp_manager'); }
+function canManageExpenses(){ return can('admin','marketing_director','erp_manager'); }
+function customerOutstanding(customerId){
+  return approvedSales().filter(s=>s.customerId===customerId && invoiceStatus(s)!=='cancelled')
+    .reduce((a,s)=>a+Math.max(0,Number(s.total||0)-Number(s.paidAmount||0)),0);
+}
+function dueDateFor(customer,saleDateValue){
+  const d=asDate(saleDateValue)||new Date(); d.setDate(d.getDate()+Number(customer?.creditDays||0)); return Timestamp.fromDate(d);
+}
+function auditSet(tx, action, entityType, entityId, details={}){
+  const ref=doc(collection(db,'auditTrail')), now=Timestamp.now();
+  tx.set(ref,{action,entityType,entityId,actorId:state.user.uid,actorName:state.me?.fullName||state.user.email||'',actorRole:role(),details,createdAt:now});
+}
+async function writeAudit(action,entityType,entityId,details={}){
+  await addDoc(collection(db,'auditTrail'),{action,entityType,entityId,actorId:state.user.uid,actorName:state.me?.fullName||state.user.email||'',actorRole:role(),details,createdAt:serverTimestamp()});
+}
+function normalizeKey(v=''){ return String(v).trim().toLowerCase().replace(/\s+/g,' '); }
+function idxId(prefix,v=''){ return `${prefix}:${encodeURIComponent(normalizeKey(v))}`; }
+function ledgerEntry(tx,data){
+  const ref=doc(collection(db,'ledgerEntries'));
+  tx.set(ref,{...data,createdAt:Timestamp.now(),createdBy:state.user.uid});
+  return ref;
+}
+function ledgerRowsForCustomer(customerId){
+  const stored=state.ledgerEntries.filter(e=>e.customerId===customerId);
+  const sourceKeys=new Set(stored.map(e=>`${e.sourceType||e.documentType||''}:${e.sourceId||e.documentId||''}:${e.entryType||''}`));
+  const extra=[];
+  const cust=state.customers.find(c=>c.id===customerId);
+  if(Number(cust?.openingBalance||0)!==0 && !stored.some(e=>e.entryType==='opening_balance')){
+    const ob=Number(cust.openingBalance||0); extra.push({id:'legacy-opening',customerId,entryType:'opening_balance',documentNo:'OPENING',transactionDate:cust.createdAt||Timestamp.fromDate(new Date(0)),debit:ob>0?ob:0,credit:ob<0?-ob:0,notes:'Opening balance'});
+  }
+  state.sales.filter(s=>s.customerId===customerId && invoiceStatus(s)==='approved').forEach(s=>{
+    const key=`sale:${s.id}:invoice`; if(!sourceKeys.has(key)){
+      extra.push({id:`legacy-sale-${s.id}`,customerId,entryType:'credit_sale',sourceType:'sale',sourceId:s.id,documentType:'invoice',documentId:s.id,documentNo:s.invoiceNo,invoiceNo:s.invoiceNo,transactionDate:s.saleDate,debit:Number(s.total||0),credit:0,paymentStatus:s.paymentStatus,dueDate:s.dueDate||dueDateFor(cust,s.saleDate),notes:'Approved invoice'});
+      if(Number(s.paidAmount||0)>0) extra.push({id:`legacy-pay-${s.id}`,customerId,entryType:'payment_received',sourceType:'legacy_payment',sourceId:s.id,documentType:'receipt',documentId:s.id,documentNo:`${s.invoiceNo}-PAY`,invoiceNo:s.invoiceNo,transactionDate:s.saleDate,debit:0,credit:Number(s.paidAmount||0),notes:'Legacy recorded payment'});
+    }
+  });
+  return [...stored,...extra].sort((a,b)=>(asDate(a.transactionDate)?.getTime()||0)-(asDate(b.transactionDate)?.getTime()||0));
+}
+function readSmallAttachment(file){
+  if(!file) return Promise.resolve(null);
+  if(file.size>500000) return Promise.reject(new Error('Attachment must be 500 KB or smaller.'));
+  return new Promise((resolve,reject)=>{ const r=new FileReader(); r.onload=()=>resolve({name:file.name,type:file.type||'application/octet-stream',dataUrl:r.result}); r.onerror=()=>reject(r.error||new Error('Attachment could not be read.')); r.readAsDataURL(file); });
+}
 
 const navByRole = {
-  admin:[['dashboard','Dashboard','⌂'],['sales','Sales & Invoices','🧾'],['customers','Customers','◫'],['inventory','Inventory','▣'],['recovery','Recovery','₨'],['expenses','Expenses','−'],['reports','Reports','▤'],['users','Users & Roles','♙'],['settings','Settings','⚙']],
+  admin:[['dashboard','Dashboard','⌂'],['sales','Sales & Invoices','🧾'],['customers','Customers','◫'],['ledger','Customer Ledger','▤'],['inventory','Inventory','▣'],['recovery','Recovery','₨'],['expenses','Expenses','−'],['reports','Reports','▥'],['users','Users & Roles','♙'],['audit','Audit Trail','☷'],['settings','Settings','⚙']],
+  marketing_director:[['dashboard','Dashboard','⌂'],['sales','Invoice Approval','🧾'],['customers','Customers','◫'],['ledger','Customer Ledger','▤'],['recovery','Recovery','₨'],['expenses','Expenses','−'],['reports','Reports','▥']],
+  erp_manager:[['dashboard','Dashboard','⌂'],['sales','Sales & Invoices','🧾'],['customers','Customers','◫'],['ledger','Customer Ledger','▤'],['inventory','Inventory','▣'],['expenses','Expenses','−'],['reports','Reports','▥'],['users','Users & Roles','♙'],['audit','Audit Trail','☷'],['settings','Settings','⚙']],
   inventory:[['dashboard','Dashboard','⌂'],['sales','Invoices','🧾'],['customers','Customers','◫'],['inventory','Inventory','▣']],
-  salesman:[['dashboard','My Dashboard','⌂'],['sales','My Sales','🧾'],['customers','My Customers','◫'],['recovery','My Recovery','₨']],
-  recovery:[['dashboard','Dashboard','⌂'],['sales','Invoices','🧾'],['customers','Customers','◫'],['recovery','Recovery','₨']]
+  salesman:[['dashboard','My Dashboard','⌂'],['sales','My Sales','🧾'],['customers','My Customers','◫'],['ledger','Customer Ledger','▤']],
+  recovery:[['dashboard','Dashboard','⌂'],['sales','Invoices','🧾'],['customers','Customers','◫'],['ledger','Customer Ledger','▤'],['recovery','Recovery','₨']]
 };
 
 function renderNav(){
@@ -79,7 +131,7 @@ function go(page){
   $('#pageTitle').textContent=(navByRole[role()]||[]).find(x=>x[0]===page)?.[1]||'Naturegen'; renderNav(); renderPage();
 }
 function renderPage(){
-  const fn={dashboard:renderDashboard,sales:renderSales,customers:renderCustomers,inventory:renderInventory,recovery:renderRecovery,expenses:renderExpenses,reports:renderReports,users:renderUsers,settings:renderSettings}[state.page];
+  const fn={dashboard:renderDashboard,sales:renderSales,customers:renderCustomers,ledger:renderLedger,inventory:renderInventory,recovery:renderRecovery,expenses:renderExpenses,reports:renderReports,users:renderUsers,audit:renderAudit,settings:renderSettings}[state.page];
   if(fn) fn();
 }
 
@@ -114,9 +166,12 @@ async function startLiveData(){
   attachCollection('customers','customers');
   attachCollection('users','users');
   attachCollection('sales','sales');
-  if(can('admin','recovery','salesman')) attachCollection('payments','payments'); else state.payments=[];
-  if(can('admin')) attachCollection('expenses','expenses'); else state.expenses=[];
-  if(can('admin','inventory')) attachCollection('stockMovements','movements'); else state.movements=[];
+  if(can('admin','marketing_director','erp_manager','recovery')) attachCollection('payments','payments'); else if(can('salesman')) attachCollection('payments','payments'); else state.payments=[];
+  if(can('admin','marketing_director','erp_manager')) attachCollection('expenses','expenses'); else state.expenses=[];
+  if(can('admin','erp_manager','inventory','marketing_director')) attachCollection('stockMovements','movements'); else state.movements=[];
+  if(can('admin','marketing_director','erp_manager','recovery','salesman')) attachCollection('ledgerEntries','ledgerEntries'); else state.ledgerEntries=[];
+  if(can('admin','erp_manager')) attachCollection('auditTrail','auditTrail'); else state.auditTrail=[];
+  if(can('admin','marketing_director','erp_manager')) attachCollection('cashBankAccounts','accounts'); else state.accounts=[];
   state.unsubs.push(onSnapshot(doc(db,'settings','company'), s=>{ state.settings=s.exists()?{id:s.id,...s.data()}:null; renderPage(); }));
   state.liveReady=true;
 }
