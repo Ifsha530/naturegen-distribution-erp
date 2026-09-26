@@ -302,6 +302,63 @@ async function saveSale(e){
   }catch(err){ console.error(err); toast(err.message||'Invoice could not be saved.',true); }
 }
 
+async function submitInvoice(id){
+  const s=state.sales.find(x=>x.id===id); if(!s||invoiceStatus(s)!=='draft') return;
+  if(can('salesman')&&s.createdBy!==state.user.uid) return toast('You can submit only your own draft.',true);
+  const ref=doc(db,'sales',id);
+  try{
+    await runTransaction(db,async tx=>{
+      const snap=await tx.get(ref);
+      if(!snap.exists()||invoiceStatus(snap.data())!=='draft') throw new Error('Draft is no longer available.');
+      const now=Timestamp.now();
+      tx.update(ref,{status:'pending_approval',submittedAt:now,updatedAt:now});
+      auditSet(tx,'invoice_submitted','invoice',id,{invoiceNo:snap.data().invoiceNo});
+    });
+    closeModal(); toast('Invoice submitted for Marketing Director approval.');
+  }catch(err){toast(err.message,true);}
+}
+
+async function approveInvoice(id){
+  if(!canApproveInvoice()) return toast('Approval permission required.',true);
+  const saleRef=doc(db,'sales',id), s0=state.sales.find(x=>x.id===id); if(!s0)return;
+  const productRefs=(s0.items||[]).map(i=>doc(db,'products',i.productId)), customerRef=doc(db,'customers',s0.customerId);
+  const fallbackBalance=customerOutstanding(s0.customerId);
+  try{
+    await runTransaction(db,async tx=>{
+      const saleSnap=await tx.get(saleRef); if(!saleSnap.exists()) throw new Error('Invoice not found.');
+      const s=saleSnap.data(); if(invoiceStatus(s)!=='pending_approval') throw new Error('Invoice is not pending approval.');
+      if(s.createdBy===state.user.uid) throw new Error('Creator cannot approve the same invoice.');
+      const customerSnap=await tx.get(customerRef); if(!customerSnap.exists()) throw new Error('Customer not found.');
+      const productSnaps=[]; for(const ref of productRefs) productSnaps.push(await tx.get(ref));
+      const now=Timestamp.now();
+      productSnaps.forEach((snap,idx)=>{
+        if(!snap.exists()) throw new Error(`Product not found: ${(s.items||[])[idx]?.name||''}`);
+        const p=snap.data(), item=s.items[idx], need=Number(item.issuedQty||0), old=Number(p.stockQty||0);
+        if(old<need) throw new Error(`${p.name}: only ${old} units available; ${need} required.`);
+      });
+      productSnaps.forEach((snap,idx)=>{
+        const p=snap.data(), item=s.items[idx], need=Number(item.issuedQty||0), old=Number(p.stockQty||0), bal=old-need;
+        tx.update(productRefs[idx],{stockQty:bal,updatedAt:now});
+        const mref=doc(collection(db,'stockMovements'));
+        tx.set(mref,{productId:item.productId,productName:item.name,movementType:'sale_approved',qtyChange:-need,paidQty:Number(item.paidQty||0),freeQty:Number(item.freeQty||0),balanceAfter:bal,refType:'sale',refId:id,notes:`Approved invoice ${s.invoiceNo}`,enteredBy:state.user.uid,createdAt:now});
+      });
+      const initialPaid=Math.min(Number(s.proposedPaidAmount||0),Number(s.total||0));
+      const customer=customerSnap.data(), base=Number.isFinite(Number(customer.currentBalance))?Number(customer.currentBalance):fallbackBalance;
+      tx.update(customerRef,{currentBalance:base+Number(s.total||0)-initialPaid,updatedAt:now});
+      ledgerEntry(tx,{customerId:s.customerId,salesmanId:s.salesmanId,entryType:initialPaid>=Number(s.total||0)&&Number(s.total||0)>0?'cash_sale':'credit_sale',sourceType:'sale',sourceId:id,documentType:'invoice',documentId:id,documentNo:s.invoiceNo,invoiceNo:s.invoiceNo,transactionDate:s.saleDate,debit:Number(s.subtotal||s.total||0),credit:0,paymentStatus:calcStatus(s.total,initialPaid),dueDate:s.dueDate||dueDateFor(customer,s.saleDate),notes:'Approved sales invoice'});
+      if(Number(s.discount||0)>0) ledgerEntry(tx,{customerId:s.customerId,salesmanId:s.salesmanId,entryType:'discount',sourceType:'sale_discount',sourceId:id,documentType:'invoice',documentId:id,documentNo:s.invoiceNo,invoiceNo:s.invoiceNo,transactionDate:s.saleDate,debit:0,credit:Number(s.discount),notes:'Approved invoice discount'});
+      if(initialPaid>0){
+        const pRef=doc(collection(db,'payments'));
+        tx.set(pRef,{saleId:id,invoiceNo:s.invoiceNo,customerId:s.customerId,salesmanId:s.salesmanId,amount:initialPaid,method:s.paymentMethod||'cash',reference:'',notes:'Received with approved invoice',paymentDate:now,enteredBy:state.user.uid,createdAt:now,reversed:false});
+        ledgerEntry(tx,{customerId:s.customerId,salesmanId:s.salesmanId,entryType:'payment_received',sourceType:'payment',sourceId:pRef.id,documentType:'receipt',documentId:pRef.id,documentNo:`RCPT-${s.invoiceNo}`,invoiceNo:s.invoiceNo,transactionDate:now,debit:0,credit:initialPaid,notes:'Payment received with invoice approval'});
+      }
+      tx.update(saleRef,{status:'approved',approvedBy:state.user.uid,approverName:state.me?.fullName||'',approvedAt:now,reviewedBy:state.user.uid,reviewedAt:now,exceptionalFreeApprovedBy:s.exceptionalFreeRequired?state.user.uid:null,stockApplied:true,dispatchEligible:true,paidAmount:initialPaid,paymentStatus:calcStatus(s.total,initialPaid),updatedAt:now});
+      auditSet(tx,'invoice_approved','invoice',id,{invoiceNo:s.invoiceNo,total:s.total,exceptionalFreeApproved:Boolean(s.exceptionalFreeRequired),initialPaid});
+    });
+    closeModal(); toast('Invoice approved. Stock, ledger and dispatch are now active.');
+  }catch(err){console.error(err);toast(err.message,true);}
+}
+
 function openInvoice(id){
   const s=state.sales.find(x=>x.id===id); if(!s) return;
   const cust=state.customers.find(x=>x.id===s.customerId); const settings=state.settings||{};
