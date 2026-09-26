@@ -139,7 +139,7 @@ function clearListeners(){ state.unsubs.forEach(u=>{try{u();}catch{}}); state.un
 function userQueryFor(collectionName){
   const ref=collection(db,collectionName);
   if(role()==='salesman'){
-    if(collectionName==='sales' || collectionName==='payments') return query(ref,where('salesmanId','==',state.user.uid));
+    if(collectionName==='sales' || collectionName==='payments' || collectionName==='ledgerEntries') return query(ref,where('salesmanId','==',state.user.uid));
     if(collectionName==='customers') return query(ref,where('assignedSalesmanId','==',state.user.uid));
   }
   return ref;
@@ -155,6 +155,8 @@ function attachCollection(name, target, transform=(x)=>x){
     if(target==='payments') state.payments=sortDesc(state.payments,'paymentDate');
     if(target==='expenses') state.expenses=sortDesc(state.expenses,'expenseDate');
     if(target==='movements') state.movements=sortDesc(state.movements,'createdAt');
+    if(target==='ledgerEntries') state.ledgerEntries=sortDesc(state.ledgerEntries,'transactionDate');
+    if(target==='auditTrail') state.auditTrail=sortDesc(state.auditTrail,'createdAt');
     setSync(`Live • ${new Date().toLocaleTimeString('en-PK')}`); renderPage();
   }, err=>{ console.error(name,err); setSync(`Sync error: ${name}`); toast(`${name}: ${err.message}`,true); });
   state.unsubs.push(unsub);
