@@ -225,7 +225,7 @@ function openSaleForm(){
   const salesmanSelect=can('admin')?`<label>Salesman<select id="saleSalesman" required><option value="">Select salesman</option>${reps.map(r=>`<option value="${r.id}">${esc(r.fullName)} — ${esc(r.routeArea||'')}</option>`).join('')}</select></label>`:`<input id="saleSalesman" type="hidden" value="${state.user.uid}">`;
   showModal('New Sales Invoice',`<form id="saleForm" class="stack">
     <div class="form-grid"><label>Date<input id="saleDate" type="date" value="${todayISO()}" required></label>${salesmanSelect}<label class="full">Customer<select id="saleCustomer" required><option value="">Select pharmacy/customer</option>${state.customers.filter(c=>c.active!==false).map(c=>`<option value="${c.id}">${esc(c.customerCode||'')} ${esc(c.shopName)}${c.routeArea?' — '+esc(c.routeArea):''}</option>`).join('')}</select></label></div>
-    <div><b>Products</b><div class="help">Complimentary/Free Quantity starts at zero. Enter it only for an authorized scheme or management approval.</div></div>
+    <div><b>Products</b><div class="help">Complimentary/Free Quantity starts at zero. It is scheme-authorized only for customers marked eligible; otherwise Marketing Director approval is required.</div><div id="customerSchemeNote" class="metric-note"></div></div>
     <div class="sale-lines">${activeProducts().map(p=>`<div class="sale-line" data-product="${p.id}"><div class="wide"><b>${esc(p.name)}</b><div class="metric-note">Stock ${fmt(p.stockQty)} • Authorized scheme ${p.schemeBuy||0}+${p.schemeFree||0} • Price ${money(p.salePrice)}</div></div><label>Paid Qty<input class="line-qty" type="number" min="0" step="1" value="0"></label><label>Free Qty<input class="line-free" type="number" min="0" step="1" value="0"></label><label>Unit Price<input class="line-price" type="number" min="0" step="0.01" value="${Number(p.salePrice||0)}" ${can('admin')?'':'readonly'}></label><div class="line-total">${money(0)}</div></div>`).join('')}</div>
     <div id="freeExceptionNote" class="approval-note hidden">Complimentary quantity exceeds the product scheme limit. Marketing Director approval is required.</div>
     <div class="form-grid"><label>Discount<input id="saleDiscount" type="number" min="0" step="0.01" value="0"></label><label>Proposed Received Amount<input id="salePaid" type="number" min="0" step="0.01" value="0"></label><label>Payment Method<select id="salePaymentMethod"><option value="cash">Cash</option><option value="bank">Bank</option><option value="easypaisa">Easypaisa</option><option value="jazzcash">JazzCash</option><option value="cheque">Cheque</option></select></label><label class="full">Notes<textarea id="saleNotes"></textarea></label></div>
@@ -234,16 +234,19 @@ function openSaleForm(){
   </form>`);
   const recalc=()=>{
     let gross=0,exception=false;
-    $$('.sale-line').forEach(row=>{
+    const selectedCustomer=state.customers.find(x=>x.id===$('#saleCustomer').value);
+    const eligible=selectedCustomer?.complimentarySchemeEligible===true;
+    if($('#customerSchemeNote')) $('#customerSchemeNote').textContent=selectedCustomer ? (eligible?'Customer is eligible for the standard complimentary scheme.':'Customer is not scheme-authorized; any free quantity will be treated as an exception for Marketing Director review.') : 'Select a customer to check complimentary scheme eligibility.';
+    $('.sale-line').forEach(row=>{
       const p=state.products.find(x=>x.id===row.dataset.product), qty=Math.max(0,Math.floor(Number(row.querySelector('.line-qty').value||0))), free=Math.max(0,Math.floor(Number(row.querySelector('.line-free').value||0))), price=Math.max(0,Number(row.querySelector('.line-price').value||0));
       const limit=Number(p?.schemeBuy||0)>0?Math.floor(qty/Number(p.schemeBuy))*Number(p.schemeFree||0):0;
-      if(free>limit) exception=true;
+      if(free>0 && (!eligible || free>limit)) exception=true;
       const lt=qty*price; gross+=lt; row.querySelector('.line-total').textContent=money(lt);
     });
     const disc=Math.max(0,Number($('#saleDiscount').value||0)), total=Math.max(0,gross-disc); $('#saleGross').textContent=money(gross); $('#saleDiscountView').textContent=money(disc); $('#saleTotal').textContent=money(total); $('#salePaid').max=String(total);
     $('#freeExceptionNote').classList.toggle('hidden',!exception);
   };
-  $$('.line-qty,.line-free,.line-price').forEach(i=>i.oninput=recalc); $('#saleDiscount').oninput=recalc; recalc();
+  $('.line-qty,.line-free,.line-price').forEach(i=>i.oninput=recalc); $('#saleDiscount').oninput=recalc; $('#saleCustomer').onchange=recalc; recalc();
   $('#saleForm').onsubmit=saveSale;
 }
 
@@ -254,13 +257,16 @@ async function saveSale(e){
   const salesmanId=$('#saleSalesman').value, customerId=$('#saleCustomer').value;
   if(!salesmanId||!customerId) return toast('Select salesman and customer.',true);
   if(can('salesman') && salesmanId!==state.user.uid) return toast('Salesman mismatch.',true);
+  const selectedCustomer=state.customers.find(x=>x.id===customerId);
+  const customerSchemeEligible=selectedCustomer?.complimentarySchemeEligible===true;
   const items=[]; let exceptionalFree=false;
-  $$('.sale-line').forEach(row=>{
+  $('.sale-line').forEach(row=>{
     const p=state.products.find(x=>x.id===row.dataset.product), paidQty=Math.max(0,Math.floor(Number(row.querySelector('.line-qty').value||0))), freeQty=Math.max(0,Math.floor(Number(row.querySelector('.line-free').value||0))), unitPrice=Math.max(0,Number(row.querySelector('.line-price').value||0));
     if(p && (paidQty>0||freeQty>0)){
       const schemeFreeLimit=Number(p.schemeBuy||0)>0?Math.floor(paidQty/Number(p.schemeBuy))*Number(p.schemeFree||0):0;
-      if(freeQty>schemeFreeLimit) exceptionalFree=true;
-      items.push({productId:p.id,sku:p.sku||'',name:p.name,paidQty,freeQty,issuedQty:paidQty+freeQty,schemeFreeLimit,complimentaryAddedBy:freeQty>0?state.user.uid:null,unitPrice,lineTotal:paidQty*unitPrice,costPrice:Number(p.costPrice||0),mrp:Number(p.mrp||0)});
+      const freeException=freeQty>0 && (!customerSchemeEligible || freeQty>schemeFreeLimit);
+      if(freeException) exceptionalFree=true;
+      items.push({productId:p.id,sku:p.sku||'',name:p.name,paidQty,freeQty,issuedQty:paidQty+freeQty,schemeFreeLimit,complimentaryCustomerEligible:customerSchemeEligible,complimentaryException:freeException,complimentaryAddedBy:freeQty>0?state.user.uid:null,complimentaryAddedByName:freeQty>0?(state.me?.fullName||''):null,unitPrice,lineTotal:paidQty*unitPrice,costPrice:Number(p.costPrice||0),mrp:Number(p.mrp||0)});
     }
   });
   if(!items.length) return toast('Enter at least one paid or complimentary quantity.',true);
@@ -275,8 +281,10 @@ async function saveSale(e){
       let next=counterSnap.exists()?Number(counterSnap.data().next||1):1;
       const invoiceNo=`NG-${String(next).padStart(6,'0')}`, now=Timestamp.now(), customer=customerSnap.data(), saleTs=tsFromInput($('#saleDate').value);
       tx.set(counterRef,{next:next+1},{merge:true});
-      tx.set(saleRef,{invoiceNo,saleDate:saleTs,customerId,salesmanId,items,subtotal:gross,discount,total,proposedPaidAmount,paymentMethod:$('#salePaymentMethod').value,paidAmount:0,paymentStatus:calcStatus(total,0),status,dispatchEligible:false,stockApplied:false,exceptionalFreeRequired:exceptionalFree,notes:$('#saleNotes').value.trim()||'',dueDate:dueDateFor(customer,saleTs),createdBy:state.user.uid,creatorName:state.me?.fullName||'',createdAt:now,submittedAt:status==='pending_approval'?now:null,updatedAt:now});
-      auditSet(tx,status==='draft'?'invoice_draft_created':'invoice_submitted','invoice',saleRef.id,{invoiceNo,total,customerId,salesmanId,exceptionalFree});
+      const totalPaidUnits=items.reduce((a,i)=>a+Number(i.paidQty||0),0), totalFreeUnits=items.reduce((a,i)=>a+Number(i.freeQty||0),0), totalDeliveredUnits=totalPaidUnits+totalFreeUnits;
+      tx.set(saleRef,{invoiceNo,saleDate:saleTs,customerId,salesmanId,items,subtotal:gross,discount,total,proposedPaidAmount,paymentMethod:$('#salePaymentMethod').value,paidAmount:0,paymentStatus:calcStatus(total,0),status,dispatchEligible:false,stockApplied:false,customerSchemeEligible,exceptionalFreeRequired:exceptionalFree,totalPaidUnits,totalFreeUnits,totalDeliveredUnits,notes:$('#saleNotes').value.trim()||'',dueDate:dueDateFor(customer,saleTs),createdBy:state.user.uid,creatorName:state.me?.fullName||'',createdAt:now,submittedAt:status==='pending_approval'?now:null,updatedAt:now});
+      auditSet(tx,status==='draft'?'invoice_draft_created':'invoice_submitted','invoice',saleRef.id,{invoiceNo,total,customerId,salesmanId,exceptionalFree,totalPaidUnits,totalFreeUnits,totalDeliveredUnits});
+      if(totalFreeUnits>0) auditSet(tx,'complimentary_qty_proposed','invoice',saleRef.id,{invoiceNo,customerId,salesmanId,totalFreeUnits,customerSchemeEligible,exceptionalFree,addedBy:state.user.uid});
       return {invoiceNo,status};
     });
     closeModal(); toast(result.status==='draft'?`Draft saved: ${result.invoiceNo}`:`Submitted for approval: ${result.invoiceNo}`);
