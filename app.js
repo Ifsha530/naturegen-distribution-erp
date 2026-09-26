@@ -607,9 +607,31 @@ function openAccountForm(){
   showModal('Add Cash / Bank Account',`<form id="accountForm" class="form-grid"><label>Account Name<input id="accName" required></label><label>Type<select id="accType"><option value="cash">Cash</option><option value="bank">Bank</option><option value="wallet">Wallet</option></select></label><label>Opening Balance<input id="accBalance" type="number" step="0.01" value="0"></label><div class="full"><button class="btn primary">Create Account</button></div></form>`);
   $('#accountForm').onsubmit=async e=>{e.preventDefault();try{const ref=doc(collection(db,'cashBankAccounts')),now=Timestamp.now();await setDoc(ref,{name:$('#accName').value.trim(),type:$('#accType').value,balance:Number($('#accBalance').value||0),active:true,createdBy:state.user.uid,createdAt:now,updatedAt:now});await writeAudit('cash_bank_account_created','account',ref.id,{name:$('#accName').value.trim(),type:$('#accType').value,openingBalance:Number($('#accBalance').value||0)});closeModal();toast('Account created.');}catch(err){toast(err.message,true);}};
 }
+async function ensureControlData(){
+  const refs={
+    invoice:doc(db,'counters','invoice'),
+    customer:doc(db,'counters','customer'),
+    expense:doc(db,'counters','expense'),
+    cash:doc(db,'cashBankAccounts','cash-main')
+  };
+  await runTransaction(db,async tx=>{
+    const [invoiceSnap,customerSnap,expenseSnap,cashSnap]=await Promise.all([
+      tx.get(refs.invoice),tx.get(refs.customer),tx.get(refs.expense),tx.get(refs.cash)
+    ]);
+    const now=Timestamp.now();
+    if(!invoiceSnap.exists()) tx.set(refs.invoice,{next:1,createdAt:now});
+    if(!customerSnap.exists()) tx.set(refs.customer,{next:1,createdAt:now});
+    if(!expenseSnap.exists()) tx.set(refs.expense,{next:1,createdAt:now});
+    if(!cashSnap.exists()) tx.set(refs.cash,{name:'Main Cash',type:'cash',balance:0,active:true,createdAt:now,updatedAt:now});
+  });
+}
 async function initializeControlData(){
   if(!can('admin','erp_manager'))return;
-  try{const batch=writeBatch(db),now=serverTimestamp();batch.set(doc(db,'counters','invoice'),{next:1},{merge:true});batch.set(doc(db,'counters','customer'),{next:1},{merge:true});batch.set(doc(db,'counters','expense'),{next:1},{merge:true});batch.set(doc(db,'cashBankAccounts','cash-main'),{name:'Main Cash',type:'cash',balance:0,active:true,updatedAt:now},{merge:true});await batch.commit();await writeAudit('control_data_initialized','settings','controls',{});toast('Control data initialized without removing existing records.');}catch(err){toast(err.message,true);}
+  try{
+    await ensureControlData();
+    await writeAudit('control_data_initialized','settings','controls',{preservedExistingCounters:true,preservedExistingBalances:true});
+    toast('Control data checked. Existing counters and balances were preserved.');
+  }catch(err){toast(err.message,true);}
 }
 async function seedInitialData(){
   if(!can('admin','erp_manager'))return;
@@ -618,15 +640,17 @@ async function seedInitialData(){
   const p1=doc(collection(db,'products')),p2=doc(collection(db,'products'));
   batch.set(p1,{sku:'AIMACID-120',name:'Aimacid Syrup 120 ml',mrp:190,salePrice:65,costPrice:35,stockQty:10400,lowStockThreshold:500,schemeBuy:10,schemeFree:1,active:true,createdAt:now,updatedAt:now});
   batch.set(p2,{sku:'IRON-120',name:'Iron Syrup 120 ml',mrp:0,salePrice:90,costPrice:35,stockQty:2600,lowStockThreshold:200,schemeBuy:10,schemeFree:1,active:true,createdAt:now,updatedAt:now});
-  batch.set(doc(db,'counters','invoice'),{next:1},{merge:true});batch.set(doc(db,'counters','customer'),{next:1},{merge:true});batch.set(doc(db,'counters','expense'),{next:1},{merge:true});
-  batch.set(doc(db,'cashBankAccounts','cash-main'),{name:'Main Cash',type:'cash',balance:0,active:true,updatedAt:now},{merge:true});
   batch.set(doc(db,'settings','company'),{companyName:'Naturegen Distribution',monthlyProfitTarget:100000,updatedAt:now},{merge:true});
   const m1=doc(collection(db,'stockMovements')),m2=doc(collection(db,'stockMovements'));
   batch.set(m1,{productId:p1.id,productName:'Aimacid Syrup 120 ml',movementType:'opening',qtyChange:10400,balanceAfter:10400,refType:'opening',refId:'',notes:'Initial opening stock',enteredBy:state.user.uid,createdAt:now});
   batch.set(m2,{productId:p2.id,productName:'Iron Syrup 120 ml',movementType:'opening',qtyChange:2600,balanceAfter:2600,refType:'opening',refId:'',notes:'Initial opening stock',enteredBy:state.user.uid,createdAt:now});
-  try{await batch.commit();await writeAudit('initial_business_data_created','settings','initial',{products:['Aimacid Syrup 120 ml','Iron Syrup 120 ml']});toast('Initial Naturegen data created.');}catch(err){toast(err.message,true);}
+  try{
+    await batch.commit();
+    await ensureControlData();
+    await writeAudit('initial_business_data_created','settings','initial',{products:['Aimacid Syrup 120 ml','Iron Syrup 120 ml']});
+    toast('Initial Naturegen data created.');
+  }catch(err){toast(err.message,true);}
 }
-
 async function init(){
   if(!configured){ $('#configWarning').classList.remove('hidden'); return; }
   onAuthStateChanged(auth,async user=>{
