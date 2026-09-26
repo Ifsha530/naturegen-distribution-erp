@@ -238,29 +238,31 @@ function renderSales(){
 function bindInvoiceButtons(){ $$('[data-invoice]').forEach(b=>b.onclick=()=>openInvoice(b.dataset.invoice)); }
 
 function openSaleForm(){
-  if(!state.customers.length) return toast('Add a customer first.',true);
+  if(!state.customers.filter(c=>c.active!==false).length) return toast('Add an active customer first.',true);
   if(!activeProducts().length) return toast('No active products available.',true);
   const reps=state.users.filter(u=>u.role==='salesman'&&u.active!==false);
   const salesmanSelect=can('admin')?`<label>Salesman<select id="saleSalesman" required><option value="">Select salesman</option>${reps.map(r=>`<option value="${r.id}">${esc(r.fullName)} — ${esc(r.routeArea||'')}</option>`).join('')}</select></label>`:`<input id="saleSalesman" type="hidden" value="${state.user.uid}">`;
-  showModal('New Sale / Invoice',`<form id="saleForm" class="stack">
-    <div class="form-grid"><label>Date<input id="saleDate" type="date" value="${todayISO()}" required></label>${salesmanSelect}<label class="full">Customer<select id="saleCustomer" required><option value="">Select pharmacy/customer</option>${state.customers.map(c=>`<option value="${c.id}">${esc(c.shopName)}${c.routeArea?' — '+esc(c.routeArea):''}</option>`).join('')}</select></label></div>
-    <div><b>Products</b><div class="help">Enter paid quantity. Free quantity is calculated from each product's scheme.</div></div>
-    <div class="sale-lines">${activeProducts().map(p=>`<div class="sale-line" data-product="${p.id}"><div class="wide"><b>${esc(p.name)}</b><div class="metric-note">Stock ${fmt(p.stockQty)} • Scheme ${p.schemeBuy||0}+${p.schemeFree||0} • Price ${money(p.salePrice)}</div></div><label>Paid Qty<input class="line-qty" type="number" min="0" step="1" value="0"></label><label>Free<input class="line-free" value="0" disabled></label><label>Unit Price<input class="line-price" type="number" min="0" step="0.01" value="${Number(p.salePrice||0)}" ${can('admin')?'':'readonly'}></label><div class="line-total">${money(0)}</div></div>`).join('')}</div>
-    <div class="form-grid"><label>Discount<input id="saleDiscount" type="number" min="0" step="0.01" value="0"></label><label>Received Now<input id="salePaid" type="number" min="0" step="0.01" value="0"></label><label class="full">Notes<textarea id="saleNotes"></textarea></label></div>
+  showModal('New Sales Invoice',`<form id="saleForm" class="stack">
+    <div class="form-grid"><label>Date<input id="saleDate" type="date" value="${todayISO()}" required></label>${salesmanSelect}<label class="full">Customer<select id="saleCustomer" required><option value="">Select pharmacy/customer</option>${state.customers.filter(c=>c.active!==false).map(c=>`<option value="${c.id}">${esc(c.customerCode||'')} ${esc(c.shopName)}${c.routeArea?' — '+esc(c.routeArea):''}</option>`).join('')}</select></label></div>
+    <div><b>Products</b><div class="help">Complimentary/Free Quantity starts at zero. Enter it only for an authorized scheme or management approval.</div></div>
+    <div class="sale-lines">${activeProducts().map(p=>`<div class="sale-line" data-product="${p.id}"><div class="wide"><b>${esc(p.name)}</b><div class="metric-note">Stock ${fmt(p.stockQty)} • Authorized scheme ${p.schemeBuy||0}+${p.schemeFree||0} • Price ${money(p.salePrice)}</div></div><label>Paid Qty<input class="line-qty" type="number" min="0" step="1" value="0"></label><label>Free Qty<input class="line-free" type="number" min="0" step="1" value="0"></label><label>Unit Price<input class="line-price" type="number" min="0" step="0.01" value="${Number(p.salePrice||0)}" ${can('admin')?'':'readonly'}></label><div class="line-total">${money(0)}</div></div>`).join('')}</div>
+    <div id="freeExceptionNote" class="approval-note hidden">Complimentary quantity exceeds the product scheme limit. Marketing Director approval is required.</div>
+    <div class="form-grid"><label>Discount<input id="saleDiscount" type="number" min="0" step="0.01" value="0"></label><label>Proposed Received Amount<input id="salePaid" type="number" min="0" step="0.01" value="0"></label><label>Payment Method<select id="salePaymentMethod"><option value="cash">Cash</option><option value="bank">Bank</option><option value="easypaisa">Easypaisa</option><option value="jazzcash">JazzCash</option><option value="cheque">Cheque</option></select></label><label class="full">Notes<textarea id="saleNotes"></textarea></label></div>
     <div class="card"><div class="kpi-line"><span>Gross</span><strong id="saleGross">${money(0)}</strong></div><div class="kpi-line"><span>Discount</span><span id="saleDiscountView">${money(0)}</span></div><div class="kpi-line"><span>Invoice Total</span><strong id="saleTotal">${money(0)}</strong></div></div>
-    <button class="btn primary" type="submit">Save Sale & Deduct Stock</button>
+    <div class="actions"><button class="btn ghost" type="submit" data-action="draft">Save Draft</button><button class="btn primary" type="submit" data-action="submit">Submit for Approval</button></div>
   </form>`);
   const recalc=()=>{
-    let gross=0;
+    let gross=0,exception=false;
     $$('.sale-line').forEach(row=>{
-      const p=state.products.find(x=>x.id===row.dataset.product); const qty=Math.max(0,Math.floor(Number(row.querySelector('.line-qty').value||0))); const price=Math.max(0,Number(row.querySelector('.line-price').value||0));
-      const free=(p?.schemeBuy||0)>0?Math.floor(qty/Number(p.schemeBuy))*Number(p.schemeFree||0):0;
-      row.querySelector('.line-free').value=free; const lt=qty*price; gross+=lt; row.querySelector('.line-total').textContent=money(lt);
+      const p=state.products.find(x=>x.id===row.dataset.product), qty=Math.max(0,Math.floor(Number(row.querySelector('.line-qty').value||0))), free=Math.max(0,Math.floor(Number(row.querySelector('.line-free').value||0))), price=Math.max(0,Number(row.querySelector('.line-price').value||0));
+      const limit=Number(p?.schemeBuy||0)>0?Math.floor(qty/Number(p.schemeBuy))*Number(p.schemeFree||0):0;
+      if(free>limit) exception=true;
+      const lt=qty*price; gross+=lt; row.querySelector('.line-total').textContent=money(lt);
     });
-    const disc=Math.max(0,Number($('#saleDiscount').value||0)), total=Math.max(0,gross-disc); $('#saleGross').textContent=money(gross); $('#saleDiscountView').textContent=money(disc); $('#saleTotal').textContent=money(total);
-    $('#salePaid').max=String(total);
+    const disc=Math.max(0,Number($('#saleDiscount').value||0)), total=Math.max(0,gross-disc); $('#saleGross').textContent=money(gross); $('#saleDiscountView').textContent=money(disc); $('#saleTotal').textContent=money(total); $('#salePaid').max=String(total);
+    $('#freeExceptionNote').classList.toggle('hidden',!exception);
   };
-  $$('.line-qty,.line-price').forEach(i=>i.oninput=recalc); $('#saleDiscount').oninput=recalc; recalc();
+  $$('.line-qty,.line-free,.line-price').forEach(i=>i.oninput=recalc); $('#saleDiscount').oninput=recalc; recalc();
   $('#saleForm').onsubmit=saveSale;
 }
 
