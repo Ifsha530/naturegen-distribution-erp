@@ -65,7 +65,7 @@ function approvedSales(){ return state.sales.filter(s=>invoiceStatus(s)==='appro
 function calcStatus(total, paid){ return Number(paid||0) >= Number(total||0)-0.001 ? 'paid' : Number(paid||0)>0 ? 'partial' : 'unpaid'; }
 function isManagement(){ return can('admin','marketing_director','erp_manager'); }
 function canApproveInvoice(){ return can('marketing_director'); }
-function canControlInvoice(){ return can('marketing_director','erp_manager'); }
+function canControlInvoice(){ return can('admin'); }
 function canDeactivateCustomer(){ return can('marketing_director','erp_manager'); }
 function canAuthorizeComplimentary(){ return can('marketing_director'); }
 function canManageCustomers(){ return can('admin','marketing_director','erp_manager'); }
