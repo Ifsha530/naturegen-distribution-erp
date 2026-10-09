@@ -17,7 +17,7 @@ service cloud.firestore {
     function isERPManager() { return roleIs('erp_manager'); }
     function isManagement() { return isAdmin() || isMarketingDirector() || isERPManager(); }
     function canApproveInvoices() { return isMarketingDirector(); }
-    function canControlInvoices() { return isMarketingDirector() || isERPManager(); }
+    function canControlInvoices() { return isAdmin(); }
     function canManageExpenses() { return isAdmin() || isMarketingDirector() || isERPManager(); }
 
     function saleStatus(data) { return data.get('status', 'approved'); }
