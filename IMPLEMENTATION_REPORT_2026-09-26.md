@@ -1,4 +1,4 @@
-# Naturegen Distribution ERP — Sales/Ledger/Expense Implementation Report
+# Nature Gen Distributaion ERP — Sales/Ledger/Expense Implementation Report
 Date: 26 September 2026
 
 ## Files / modules changed
