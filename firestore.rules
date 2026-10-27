@@ -236,6 +236,23 @@ service cloud.firestore {
           ])
         )
         || (
+          isAdmin()
+          && saleStatus(resource.data) == 'cancelled'
+          && request.resource.data.status == 'purged_duplicate'
+          && request.resource.data.operationalHidden == true
+          && request.resource.data.purgedAsDuplicate == true
+          && request.resource.data.purgedFromCancelled == true
+          && request.resource.data.purgedBy == request.auth.uid
+          && request.resource.data.dispatchEligible == false
+          && request.resource.data.purgeReason is string
+          && request.resource.data.purgeReason.size() > 0
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status','operationalHidden','purgedAsDuplicate','purgedFromCancelled',
+            'purgedBy','purgedByName','purgedAt','purgeReason','stockNetRemoved',
+            'ledgerNetRemoved','updatedAt','dispatchEligible'
+          ])
+        )
+        || (
           (isRecovery() || isAdmin())
           && validPaymentUpdate()
         );
@@ -309,6 +326,13 @@ service cloud.firestore {
             && canControlInvoices()
             && paymentAfter(request.resource.data.sourceId).data.reversed == true
             && paymentAfter(request.resource.data.sourceId).data.reversedBy == request.auth.uid
+          )
+          || (
+            request.resource.data.entryType == 'duplicate_purge_correction'
+            && isAdmin()
+            && saleStatus(saleAfter(request.resource.data.sourceId).data) == 'purged_duplicate'
+            && saleAfter(request.resource.data.sourceId).data.purgedBy == request.auth.uid
+            && request.resource.data.get('hiddenOperational', false) == true
           )
           || (
             request.resource.data.entryType in ['debit_note','credit_note','sales_return','approved_adjustment_debit','approved_adjustment_credit']
