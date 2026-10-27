@@ -373,7 +373,7 @@ service cloud.firestore {
     }
 
     match /invoiceSubmissionLocks/{lockId} {
-      allow read: if isAdmin() || isSalesman();
+      allow read: if isAdmin() || isERPManager() || isSalesman();
       allow create: if (isAdmin() || isSalesman())
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.saleId is string
