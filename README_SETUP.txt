@@ -1,4 +1,4 @@
-NATUREGEN DISTRIBUTION ERP — FIREBASE + GITHUB PAGES
+NATURE GEN DISTRIBUTAION ERP — FIREBASE + GITHUB PAGES
 ====================================================
 No Python. Multi-computer / mobile. Central Firebase database.
 
@@ -16,8 +16,8 @@ ROLES
 
 STEP 1 — CREATE FIREBASE PROJECT
 1. Open Firebase Console: https://console.firebase.google.com/
-2. Create project: Naturegen Distribution
-3. Add a Web App (</> icon). App name: Naturegen Distribution ERP
+2. Create project: Nature Gen Distributaion
+3. Add a Web App (</> icon). App name: Nature Gen Distributaion ERP
 4. Firebase will show firebaseConfig. Keep that page open.
 
 STEP 2 — ENABLE EMAIL/PASSWORD LOGIN
@@ -41,7 +41,7 @@ Firestore Database -> Data -> Start collection.
 Collection ID: users
 Document ID: paste the exact UID from Authentication.
 Add fields:
-  fullName       string   Naturegen Admin
+  fullName       string   Nature Gen Admin
   email          string   your admin email
   role           string   admin
   phone          string   (optional)
