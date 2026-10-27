@@ -1,6 +1,6 @@
-# Naturegen Distribution ERP
+# Nature Gen Distributaion ERP
 
-Online multi-user distribution ERP for Naturegen Distribution.
+Online multi-user distribution ERP for Nature Gen Distributaion.
 
 **Stack:** GitHub Pages + Firebase Authentication + Cloud Firestore. No Python runtime required.
 
