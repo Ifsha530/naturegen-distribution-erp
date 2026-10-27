@@ -42,7 +42,12 @@ service cloud.firestore {
 
     match /users/{uid} {
       allow read: if activeUser();
-      allow create, update: if isAdmin() || isERPManager();
+      allow create: if isAdmin() || isERPManager()
+        || (isMarketingDirector()
+          && request.resource.data.role == 'salesman'
+          && request.resource.data.active == true
+          && request.resource.data.createdBy == request.auth.uid);
+      allow update: if isAdmin() || isERPManager();
       allow delete: if false;
     }
 
@@ -57,7 +62,7 @@ service cloud.firestore {
 
     match /customerIndex/{indexId} {
       allow read: if activeUser();
-      allow create: if isAdmin() || isERPManager()
+      allow create: if isAdmin() || isERPManager() || isMarketingDirector()
         || (isSalesman()
           && request.resource.data.createdBy == request.auth.uid
           && customerAfter(request.resource.data.customerId).data.assignedSalesmanId == request.auth.uid
@@ -74,6 +79,11 @@ service cloud.firestore {
         (
           (isAdmin() || isERPManager())
           && request.resource.data.get('complimentarySchemeEligible', false) == false
+        )
+        || (
+          isMarketingDirector()
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.active == true
         )
         || (
           isSalesman()
@@ -208,6 +218,24 @@ service cloud.firestore {
           && validCancellationReason()
         )
         || (
+          canControlInvoices()
+          && saleStatus(resource.data) != 'cancelled'
+          && saleStatus(resource.data) != 'void_duplicate'
+          && request.resource.data.status == 'void_duplicate'
+          && request.resource.data.voidedAsDuplicate == true
+          && request.resource.data.voidedBy == request.auth.uid
+          && request.resource.data.voidedWithoutReversal == true
+          && request.resource.data.dispatchEligible == false
+          && request.resource.data.stockApplied == resource.data.get('stockApplied', false)
+          && request.resource.data.paidAmount == resource.data.get('paidAmount', 0)
+          && request.resource.data.voidReason is string
+          && request.resource.data.voidReason.size() > 0
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status','voidedAsDuplicate','voidedBy','voidedByName','voidedAt',
+            'voidReason','voidedWithoutReversal','dispatchEligible','updatedAt'
+          ])
+        )
+        || (
           (isRecovery() || isAdmin())
           && validPaymentUpdate()
         );
@@ -228,7 +256,7 @@ service cloud.firestore {
         && request.resource.data.salesmanId == saleAfter(request.resource.data.saleId).data.salesmanId;
 
       allow update: if
-        (isMarketingDirector() || isERPManager())
+        isAdmin()
         && request.resource.data.diff(resource.data).affectedKeys()
            .hasOnly(['reversed','reversedBy','reversedAt','reversalReason'])
         && request.resource.data.reversed == true
@@ -344,6 +372,25 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    match /invoiceSubmissionLocks/{lockId} {
+      allow read: if isAdmin() || isSalesman();
+      allow create: if (isAdmin() || isSalesman())
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.saleId is string
+        && request.resource.data.invoiceNo is string;
+      allow update, delete: if false;
+    }
+
+    match /backupRuns/{backupId} {
+      allow read, create: if isAdmin() || isERPManager();
+      allow update, delete: if false;
+
+      match /records/{recordId} {
+        allow read, create: if isAdmin() || isERPManager();
+        allow update, delete: if false;
+      }
+    }
+
     match /settings/{settingId} {
       allow read: if activeUser();
       allow write: if isAdmin() || isERPManager();
@@ -356,14 +403,14 @@ service cloud.firestore {
         isAdmin()
         || isERPManager()
         || (isSalesman() && counterId in ['invoice','customer'] && request.resource.data.next == 2)
-        || (isMarketingDirector() && counterId == 'expense' && request.resource.data.next == 2);
+        || (isMarketingDirector() && counterId in ['customer','expense'] && request.resource.data.next == 2);
 
       allow update: if
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['next'])
         && request.resource.data.next == resource.data.next + 1
         && (
           (counterId == 'invoice' && (isAdmin() || isSalesman()))
-          || (counterId == 'customer' && (isAdmin() || isERPManager() || isSalesman()))
+          || (counterId == 'customer' && (isAdmin() || isERPManager() || isMarketingDirector() || isSalesman()))
           || (counterId == 'expense' && canManageExpenses())
         );
 
