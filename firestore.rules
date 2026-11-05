@@ -48,16 +48,14 @@ service cloud.firestore {
           && request.resource.data.active == true
           && request.resource.data.createdBy == request.auth.uid);
       allow update: if isAdmin() || isERPManager();
-      allow delete: if false;
+      allow delete: if isAdmin() && !(resource.data.role in ['admin','marketing_director','erp_manager']);
     }
 
     match /products/{productId} {
       allow read: if activeUser();
-      allow create: if isAdmin() || isERPManager();
-      allow update: if isAdmin() || isERPManager() || isInventory()
-        || (isMarketingDirector()
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stockQty','updatedAt']));
-      allow delete: if false;
+      allow create: if isManagement();
+      allow update: if isManagement() || isInventory();
+      allow delete: if isAdmin();
     }
 
     match /customerIndex/{indexId} {
@@ -68,7 +66,7 @@ service cloud.firestore {
           && customerAfter(request.resource.data.customerId).data.assignedSalesmanId == request.auth.uid
           && customerAfter(request.resource.data.customerId).data.createdBy == request.auth.uid);
       allow update: if isAdmin() || isERPManager() || isMarketingDirector();
-      allow delete: if false;
+      allow delete: if isAdmin();
     }
 
     match /customers/{customerId} {
@@ -148,7 +146,7 @@ service cloud.firestore {
              .hasOnly(['address','routeArea','territory','creditLimit','creditDays','updatedAt'])
         );
 
-      allow delete: if false;
+      allow delete: if isAdmin();
     }
 
     match /sales/{saleId} {
@@ -157,7 +155,7 @@ service cloud.firestore {
 
       allow create: if
         (
-          isAdmin()
+          isManagement()
           && request.resource.data.createdBy == request.auth.uid
           && request.resource.data.status in ['draft','pending_approval']
           && request.resource.data.dispatchEligible == false
@@ -174,7 +172,8 @@ service cloud.firestore {
 
       allow update: if
         (
-          isAdmin()
+          isManagement()
+          && resource.data.createdBy == request.auth.uid
           && saleStatus(resource.data) == 'draft'
           && request.resource.data.status in ['draft','pending_approval']
           && request.resource.data.dispatchEligible == false
@@ -257,7 +256,7 @@ service cloud.firestore {
           && validPaymentUpdate()
         );
 
-      allow delete: if false;
+      allow delete: if isAdmin();
     }
 
     match /payments/{paymentId} {
@@ -281,7 +280,7 @@ service cloud.firestore {
         && request.resource.data.reversalReason is string
         && request.resource.data.reversalReason.size() > 0;
 
-      allow delete: if false;
+      allow delete: if isAdmin();
     }
 
     match /ledgerEntries/{entryId} {
@@ -340,13 +339,15 @@ service cloud.firestore {
           )
         );
 
-      allow update, delete: if false;
+      allow update: if false;
+      allow delete: if isAdmin();
     }
 
     match /stockMovements/{movementId} {
       allow read: if isAdmin() || isERPManager() || isInventory() || isMarketingDirector();
       allow create: if isAdmin() || isERPManager() || isInventory() || isMarketingDirector();
-      allow update, delete: if false;
+      allow update: if false;
+      allow delete: if isAdmin();
     }
 
     match /expenses/{expenseId} {
@@ -379,13 +380,13 @@ service cloud.firestore {
           )
         );
 
-      allow delete: if false;
+      allow delete: if isAdmin();
     }
 
     match /cashBankAccounts/{accountId} {
       allow read: if canManageExpenses();
       allow create, update: if canManageExpenses();
-      allow delete: if false;
+      allow delete: if isAdmin();
     }
 
     match /auditTrail/{auditId} {
@@ -397,12 +398,13 @@ service cloud.firestore {
     }
 
     match /invoiceSubmissionLocks/{lockId} {
-      allow read: if isAdmin() || isERPManager() || isSalesman();
-      allow create: if (isAdmin() || isSalesman())
+      allow read: if isManagement() || isSalesman();
+      allow create: if (isManagement() || isSalesman())
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.saleId is string
         && request.resource.data.invoiceNo is string;
-      allow update, delete: if false;
+      allow update: if false;
+      allow delete: if isAdmin();
     }
 
     match /backupRuns/{backupId} {
@@ -433,12 +435,12 @@ service cloud.firestore {
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['next'])
         && request.resource.data.next == resource.data.next + 1
         && (
-          (counterId == 'invoice' && (isAdmin() || isSalesman()))
+          (counterId == 'invoice' && (isManagement() || isSalesman()))
           || (counterId == 'customer' && (isAdmin() || isERPManager() || isMarketingDirector() || isSalesman()))
           || (counterId == 'expense' && canManageExpenses())
         );
 
-      allow delete: if false;
+      allow delete: if isAdmin();
     }
   }
 }
