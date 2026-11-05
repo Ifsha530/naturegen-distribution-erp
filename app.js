@@ -74,6 +74,7 @@ function canAuthorizeComplimentary(){ return can('marketing_director'); }
 function canManageCustomers(){ return can('admin','marketing_director','erp_manager'); }
 function canManageExpenses(){ return can('admin','marketing_director','erp_manager'); }
 function canCreateSalesman(){ return can('admin','marketing_director','erp_manager'); }
+function canManagementCreate(){ return can('admin','marketing_director','erp_manager'); }
 function canManageBackups(){ return can('admin','erp_manager'); }
 function customerOutstanding(customerId){
   return approvedSales().filter(s=>s.customerId===customerId && invoiceStatus(s)!=='cancelled')
@@ -99,16 +100,17 @@ function ledgerEntry(tx,data){
 function ledgerRowsForCustomer(customerId){
   const hiddenSales=state.sales.filter(isOperationallyHiddenSale), hiddenIds=new Set(hiddenSales.map(s=>s.id)), hiddenNos=new Set(hiddenSales.map(s=>String(s.invoiceNo||'')).filter(Boolean));
   const stored=state.ledgerEntries.filter(e=>e.customerId===customerId && e.hiddenOperational!==true && !hiddenIds.has(e.sourceId) && !hiddenIds.has(e.documentId) && !hiddenNos.has(String(e.invoiceNo||'')));
-  const sourceKeys=new Set(stored.map(e=>`${e.sourceType||e.documentType||''}:${e.sourceId||e.documentId||''}:${e.entryType||''}`));
+  const saleLedgerIds=new Set(stored.filter(e=>e.sourceType==='sale'&&['credit_sale','cash_sale'].includes(e.entryType)).map(e=>e.sourceId));
+  const paymentLedgerSaleNos=new Set(stored.filter(e=>e.entryType==='payment_received').map(e=>String(e.invoiceNo||'')).filter(Boolean));
   const extra=[];
   const cust=state.customers.find(c=>c.id===customerId);
   if(Number(cust?.openingBalance||0)!==0 && !stored.some(e=>e.entryType==='opening_balance')){
     const ob=Number(cust.openingBalance||0); extra.push({id:'legacy-opening',customerId,entryType:'opening_balance',documentNo:'OPENING',transactionDate:cust.createdAt||Timestamp.fromDate(new Date(0)),debit:ob>0?ob:0,credit:ob<0?-ob:0,notes:'Opening balance'});
   }
   state.sales.filter(s=>s.customerId===customerId && invoiceStatus(s)==='approved').forEach(s=>{
-    const key=`sale:${s.id}:invoice`; if(!sourceKeys.has(key)){
+    if(!saleLedgerIds.has(s.id)){
       extra.push({id:`legacy-sale-${s.id}`,customerId,entryType:'credit_sale',sourceType:'sale',sourceId:s.id,documentType:'invoice',documentId:s.id,documentNo:s.invoiceNo,invoiceNo:s.invoiceNo,transactionDate:s.saleDate,debit:Number(s.total||0),credit:0,paidUnits:(s.items||[]).reduce((a,i)=>a+Number(i.paidQty||0),0),complimentaryUnits:(s.items||[]).reduce((a,i)=>a+Number(i.freeQty||0),0),totalDeliveredUnits:(s.items||[]).reduce((a,i)=>a+Number(i.issuedQty||0),0),paymentStatus:s.paymentStatus,dueDate:s.dueDate||dueDateFor(cust,s.saleDate),notes:'Approved invoice'});
-      if(Number(s.paidAmount||0)>0) extra.push({id:`legacy-pay-${s.id}`,customerId,entryType:'payment_received',sourceType:'legacy_payment',sourceId:s.id,documentType:'receipt',documentId:s.id,documentNo:`${s.invoiceNo}-PAY`,invoiceNo:s.invoiceNo,transactionDate:s.saleDate,debit:0,credit:Number(s.paidAmount||0),notes:'Legacy recorded payment'});
+      if(Number(s.paidAmount||0)>0 && !paymentLedgerSaleNos.has(String(s.invoiceNo||''))) extra.push({id:`legacy-pay-${s.id}`,customerId,entryType:'payment_received',sourceType:'legacy_payment',sourceId:s.id,documentType:'receipt',documentId:s.id,documentNo:`${s.invoiceNo}-PAY`,invoiceNo:s.invoiceNo,transactionDate:s.saleDate,debit:0,credit:Number(s.paidAmount||0),notes:'Legacy recorded payment'});
     }
   });
   return [...stored,...extra].sort((a,b)=>(asDate(a.transactionDate)?.getTime()||0)-(asDate(b.transactionDate)?.getTime()||0));
@@ -121,7 +123,7 @@ function readSmallAttachment(file){
 
 const navByRole = {
   admin:[['dashboard','Dashboard','⌂'],['sales','Sales & Invoices','🧾'],['customers','Customers','◫'],['ledger','Customer Ledger','▤'],['inventory','Inventory','▣'],['recovery','Recovery','₨'],['expenses','Expenses','−'],['reports','Reports','▥'],['users','Users & Roles','♙'],['backup','Backup Center','⇩'],['audit','Audit Trail','☷'],['settings','Settings','⚙']],
-  marketing_director:[['dashboard','Dashboard','⌂'],['sales','Invoice Approval','🧾'],['customers','Customers','◫'],['ledger','Customer Ledger','▤'],['recovery','Recovery','₨'],['expenses','Expenses','−'],['reports','Reports','▥'],['users','Salesmen','♙']],
+  marketing_director:[['dashboard','Dashboard','⌂'],['sales','Sales & Invoice Approval','🧾'],['customers','Customers','◫'],['ledger','Customer Ledger','▤'],['inventory','Inventory','▣'],['recovery','Recovery','₨'],['expenses','Expenses','−'],['reports','Reports','▥'],['users','Salesmen','♙']],
   erp_manager:[['dashboard','Dashboard','⌂'],['sales','Sales & Invoices','🧾'],['customers','Customers','◫'],['ledger','Customer Ledger','▤'],['inventory','Inventory','▣'],['recovery','Recovery','₨'],['expenses','Expenses','−'],['reports','Reports','▥'],['users','Users & Roles','♙'],['backup','Backup Center','⇩'],['audit','Audit Trail','☷'],['settings','Settings','⚙']],
   inventory:[['dashboard','Dashboard','⌂'],['sales','Invoices','🧾'],['customers','Customers','◫'],['inventory','Inventory','▣']],
   salesman:[['dashboard','My Dashboard','⌂'],['sales','My Sales','🧾'],['customers','My Customers','◫'],['ledger','Customer Ledger','▤']],
@@ -213,7 +215,7 @@ function salesTable(rows,actions=true){
 
 function renderSales(){
   const reps=state.users.filter(u=>u.role==='salesman'&&u.active!==false);
-  const canCreate=can('admin','salesman');
+  const canCreate=can('admin','marketing_director','erp_manager','salesman');
   const title=can('marketing_director')?'Invoice Approval':can('salesman')?'My Sales':'Sales & Invoices';
   $('#salesPage').innerHTML=`<div class="section-head"><div><h3>${title}</h3><div class="muted">Stock, ledger and dispatch become effective only after invoice approval.</div></div>${canCreate?'<button id="newSaleBtn" class="btn primary">+ New Invoice</button>':''}</div>
   <div class="filters"><label>Search<input id="saleSearch" placeholder="Invoice / customer"></label><label>Approval Status<select id="saleStatusFilter"><option value="">All</option><option value="draft">Draft</option><option value="pending_approval">Pending Approval</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="cancelled">Cancelled</option></select></label>${can('admin','marketing_director','erp_manager')?`<label>Salesman<select id="saleRepFilter"><option value="">All</option>${reps.map(r=>`<option value="${r.id}">${esc(r.fullName)}</option>`).join('')}</select></label>`:''}</div><div id="salesTableHost">${salesTable(accessibleSales())}</div>`;
@@ -232,15 +234,15 @@ function openSaleForm(){
   if(!activeProducts().length) return toast('No active products available.',true);
   const reps=state.users.filter(u=>u.role==='salesman'&&u.active!==false);
   const submissionToken=(globalThis.crypto?.randomUUID?.()||`sale-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-  const salesmanSelect=can('admin')?`<label>Salesman<select id="saleSalesman" required><option value="">Select salesman</option>${reps.map(r=>`<option value="${r.id}">${esc(r.fullName)} — ${esc(r.routeArea||'')}</option>`).join('')}</select></label>`:`<input id="saleSalesman" type="hidden" value="${state.user.uid}">`;
+  const salesmanSelect=canManagementCreate()?`<label>Salesman<select id="saleSalesman" required><option value="">Select salesman</option>${reps.map(r=>`<option value="${r.id}">${esc(r.fullName)} — ${esc(r.routeArea||'')}</option>`).join('')}</select></label>`:`<input id="saleSalesman" type="hidden" value="${state.user.uid}">`;
   showModal('New Sales Invoice',`<form id="saleForm" class="stack"><input id="saleSubmissionToken" type="hidden" value="${esc(submissionToken)}">
     <div class="form-grid"><label>Date<input id="saleDate" type="date" value="${todayISO()}" required></label>${salesmanSelect}<label class="full">Customer<select id="saleCustomer" required><option value="">Select pharmacy/customer</option>${state.customers.filter(c=>c.active!==false).map(c=>`<option value="${c.id}">${esc(c.customerCode||'')} ${esc(c.shopName)}${c.routeArea?' — '+esc(c.routeArea):''}</option>`).join('')}</select></label></div>
     <div><b>Products</b><div class="help">Complimentary/Free Quantity starts at zero. It is scheme-authorized only for customers marked eligible; otherwise Marketing Director approval is required.</div><div id="customerSchemeNote" class="metric-note"></div></div>
-    <div class="sale-lines">${activeProducts().map(p=>`<div class="sale-line" data-product="${p.id}"><div class="wide"><b>${esc(p.name)}</b><div class="metric-note">Stock ${fmt(p.stockQty)} • Authorized scheme ${p.schemeBuy||0}+${p.schemeFree||0} • Price ${money(p.salePrice)}</div></div><label>Paid Qty<input class="line-qty" type="number" min="0" step="1" value="0"></label><label>Free Qty<input class="line-free" type="number" min="0" step="1" value="0"></label><label>Unit Price<input class="line-price" type="number" min="0" step="0.01" value="${Number(p.salePrice||0)}" ${can('admin')?'':'readonly'}></label><div class="line-total">${money(0)}</div></div>`).join('')}</div>
+    <div class="sale-lines">${activeProducts().map(p=>`<div class="sale-line" data-product="${p.id}"><div class="wide"><b>${esc(p.name)}</b><div class="metric-note">Stock ${fmt(p.stockQty)} • Authorized scheme ${p.schemeBuy||0}+${p.schemeFree||0} • Price ${money(p.salePrice)}</div></div><label>Paid Qty<input class="line-qty" type="number" min="0" step="1" value="0"></label><label>Free Qty<input class="line-free" type="number" min="0" step="1" value="0"></label><label>Unit Price<input class="line-price" type="number" min="0" step="0.01" value="${Number(p.salePrice||0)}" ${canManagementCreate()?'':'readonly'}></label><div class="line-total">${money(0)}</div></div>`).join('')}</div>
     <div id="freeExceptionNote" class="approval-note hidden">Complimentary quantity exceeds the product scheme limit. Marketing Director approval is required.</div>
     <div class="form-grid"><label>Discount<input id="saleDiscount" type="number" min="0" step="0.01" value="0"></label><label>Proposed Received Amount<input id="salePaid" type="number" min="0" step="0.01" value="0"></label><label>Payment Method<select id="salePaymentMethod"><option value="cash">Cash</option><option value="bank">Bank</option><option value="easypaisa">Easypaisa</option><option value="jazzcash">JazzCash</option><option value="cheque">Cheque</option></select></label><label class="full">Notes<textarea id="saleNotes"></textarea></label></div>
     <div class="card"><div class="kpi-line"><span>Gross</span><strong id="saleGross">${money(0)}</strong></div><div class="kpi-line"><span>Discount</span><span id="saleDiscountView">${money(0)}</span></div><div class="kpi-line"><span>Invoice Total</span><strong id="saleTotal">${money(0)}</strong></div></div>
-    <div class="actions">${can('admin')?'<button class="btn ghost" type="submit" data-action="draft">Save Draft</button>':''}<button class="btn primary" type="submit" data-action="submit">Submit for Approval</button></div>
+    <div class="actions">${canManagementCreate()?'<button class="btn ghost" type="submit" data-action="draft">Save Draft</button>':''}<button class="btn primary" type="submit" data-action="submit">Submit for Approval</button></div>
   </form>`);
   const recalc=()=>{
     let gross=0,exception=false;
@@ -263,7 +265,7 @@ function openSaleForm(){
 async function saveSale(e){
   e.preventDefault();
   const action=e.submitter?.dataset.action||'submit';
-  const status=(action==='draft' && can('admin'))?'draft':'pending_approval';
+  const status=(action==='draft' && canManagementCreate())?'draft':'pending_approval';
   const salesmanId=$('#saleSalesman').value, customerId=$('#saleCustomer').value;
   if(!salesmanId||!customerId) return toast('Select salesman and customer.',true);
   if(can('salesman') && salesmanId!==state.user.uid) return toast('Salesman mismatch.',true);
@@ -596,8 +598,8 @@ function openLedgerAdjustment(customerId){
 }
 
 function renderInventory(){
-  if(!can('admin','erp_manager','inventory')) return;
-  $('#inventoryPage').innerHTML=`<div class="section-head"><div><h3>Inventory</h3><div class="muted">Live stock shared across all users</div></div><div class="actions">${can('admin','erp_manager')?'<button id="addProductBtn" class="btn primary">+ Add Product</button>':''}<button id="stockAdjustBtn" class="btn ghost">+ Stock Movement</button></div></div><div class="table-wrap"><table class="table"><thead><tr><th>SKU</th><th>Product</th><th>Category</th><th>Pack</th><th>Stock</th><th>Low Alert</th><th>MRP</th><th>Sale Price</th><th>Scheme</th><th></th></tr></thead><tbody>${state.products.map(p=>`<tr><td>${esc(p.sku||'')}</td><td><b>${esc(p.name)}</b></td><td>${esc(p.category||'—')}</td><td>${esc(p.packSize||'—')}</td><td>${fmt(p.stockQty)}</td><td>${fmt(p.lowStockThreshold)}</td><td>${money(p.mrp)}</td><td>${money(p.salePrice)}</td><td>${fmt(p.schemeBuy)}+${fmt(p.schemeFree)}</td><td>${can('admin','erp_manager')?`<button class="btn ghost small" data-product-edit="${p.id}">Edit</button>`:''}</td></tr>`).join('')||'<tr><td colspan="10" class="empty">No products yet. Admin / ERP Manager can add the first product here.</td></tr>'}</tbody></table></div><div class="section-head"><h3>Recent Stock Movements</h3></div><div class="table-wrap"><table class="table"><thead><tr><th>Date</th><th>Product</th><th>Type</th><th>Qty Change</th><th>Balance</th><th>Notes</th></tr></thead><tbody>${state.movements.filter(m=>m.hiddenOperational!==true && !state.sales.some(s=>isOperationallyHiddenSale(s)&&s.id===m.refId)).slice(0,100).map(m=>`<tr><td>${dt(m.createdAt)}</td><td>${esc(m.productName||productName(m.productId))}</td><td>${esc(m.movementType)}</td><td>${fmt(m.qtyChange)}</td><td>${fmt(m.balanceAfter)}</td><td>${esc(m.notes||'')}</td></tr>`).join('')}</tbody></table></div>`;
+  if(!can('admin','marketing_director','erp_manager','inventory')) return;
+  $('#inventoryPage').innerHTML=`<div class="section-head"><div><h3>Inventory</h3><div class="muted">Live stock shared across all users</div></div><div class="actions">${canManagementCreate()?'<button id="addProductBtn" class="btn primary">+ Add Product</button>':''}<button id="stockAdjustBtn" class="btn ghost">+ Stock Movement</button></div></div><div class="table-wrap"><table class="table"><thead><tr><th>SKU</th><th>Product</th><th>Category</th><th>Pack</th><th>Stock</th><th>Low Alert</th><th>MRP</th><th>Sale Price</th><th>Scheme</th><th></th></tr></thead><tbody>${state.products.map(p=>`<tr><td>${esc(p.sku||'')}</td><td><b>${esc(p.name)}</b></td><td>${esc(p.category||'—')}</td><td>${esc(p.packSize||'—')}</td><td>${fmt(p.stockQty)}</td><td>${fmt(p.lowStockThreshold)}</td><td>${money(p.mrp)}</td><td>${money(p.salePrice)}</td><td>${fmt(p.schemeBuy)}+${fmt(p.schemeFree)}</td><td>${canManagementCreate()?`<button class="btn ghost small" data-product-edit="${p.id}">Edit</button>`:''}</td></tr>`).join('')||'<tr><td colspan="10" class="empty">No products yet. Admin / ERP Manager can add the first product here.</td></tr>'}</tbody></table></div><div class="section-head"><h3>Recent Stock Movements</h3></div><div class="table-wrap"><table class="table"><thead><tr><th>Date</th><th>Product</th><th>Type</th><th>Qty Change</th><th>Balance</th><th>Notes</th></tr></thead><tbody>${state.movements.filter(m=>m.hiddenOperational!==true && !state.sales.some(s=>isOperationallyHiddenSale(s)&&s.id===m.refId)).slice(0,100).map(m=>`<tr><td>${dt(m.createdAt)}</td><td>${esc(m.productName||productName(m.productId))}</td><td>${esc(m.movementType)}</td><td>${fmt(m.qtyChange)}</td><td>${fmt(m.balanceAfter)}</td><td>${esc(m.notes||'')}</td></tr>`).join('')}</tbody></table></div>`;
   if($('#addProductBtn')) $('#addProductBtn').onclick=openAddProductForm;
   $('#stockAdjustBtn').onclick=openStockForm;
   $('[data-product-edit]').forEach(b=>b.onclick=()=>openProductForm(b.dataset.productEdit));
@@ -607,7 +609,7 @@ function openStockForm(){
   $('#stockForm').onsubmit=async e=>{e.preventDefault();const productId=$('#stProduct').value,type=$('#stType').value,qty=Math.floor(Number($('#stQty').value||0));if(!productId||qty<=0)return;const negative=['damage','adjustment_minus'].includes(type),delta=negative?-qty:qty,pRef=doc(db,'products',productId),mRef=doc(collection(db,'stockMovements'));try{await runTransaction(db,async tx=>{const ps=await tx.get(pRef);if(!ps.exists())throw new Error('Product not found.');const p=ps.data(),old=Number(p.stockQty||0),bal=old+delta;if(bal<0)throw new Error(`Only ${old} units available.`);tx.update(pRef,{stockQty:bal,updatedAt:Timestamp.now()});tx.set(mRef,{productId,productName:p.name,movementType:type,qtyChange:delta,balanceAfter:bal,refType:'manual',refId:'',notes:$('#stNotes').value.trim(),enteredBy:state.user.uid,createdAt:Timestamp.now()});});closeModal();toast('Stock updated.');}catch(err){toast(err.message,true);}};
 }
 function openAddProductForm(){
-  if(!can('admin','erp_manager')) return toast('Only Admin / ERP Manager can add products.',true);
+  if(!canManagementCreate()) return toast('Management permission required to add products.',true);
   showModal('Add Product',`<form id="addProductForm" class="form-grid">
     <label>SKU / Product Code<input id="npSku" required placeholder="e.g. AIMACID-120"></label>
     <label>Product Name<input id="npName" required></label>
@@ -783,16 +785,66 @@ function renderAudit(){
 function renderSettings(){
   if(!can('admin','erp_manager'))return;
   const s=state.settings||{}, needsSetup=state.products.length===0;
-  $('#settingsPage').innerHTML=`${needsSetup?`<div class="card setup-card"><h3>Initial Business Setup</h3><p>Products are empty. Create Nature Gen Distributaion's starting products and stock with one click.</p><button id="seedBtn" class="btn primary">Initialize Aimacid + Iron Data</button></div>`:''}<div class="card setup-card" style="margin-top:16px"><h3>Controlled Workflow Setup</h3><p>Ensures invoice/customer/expense counters and a Main Cash account exist without removing existing data.</p><button id="controlSetupBtn" class="btn ghost">Initialize / Repair Control Data</button></div><div class="card" style="max-width:760px;margin-top:16px"><h3>Company Settings</h3><form id="settingsForm" class="form-grid"><label>Company Name<input id="setName" value="${esc(COMPANY_NAME)}"></label><label>Phone<input id="setPhone" value="${esc(s.phone||'')}"></label><label class="full">Address<textarea id="setAddress">${esc(s.address||'')}</textarea></label><label>Monthly Profit Target<input id="setTarget" type="number" min="0" step="0.01" value="${s.monthlyProfitTarget||100000}"></label><div class="full"><button class="btn primary">Save Settings</button></div></form></div><div class="section-head"><h3>Cash / Bank Accounts</h3><button id="addAccountBtn" class="btn primary">+ Add Account</button></div><div class="table-wrap"><table class="table"><thead><tr><th>Name</th><th>Type</th><th>Balance</th><th>Status</th></tr></thead><tbody>${state.accounts.map(a=>`<tr><td><b>${esc(a.name)}</b></td><td>${esc(a.type||'')}</td><td>${money(a.balance)}</td><td>${a.active!==false?'Active':'Inactive'}</td></tr>`).join('')||'<tr><td colspan="4" class="empty">No accounts yet. Initialize control data to create Main Cash.</td></tr>'}</tbody></table></div>`;
-  if($('#seedBtn')) $('#seedBtn').onclick=seedInitialData; $('#controlSetupBtn').onclick=initializeControlData; $('#addAccountBtn').onclick=openAccountForm;
+  $('#settingsPage').innerHTML=`${needsSetup?`<div class="card setup-card"><h3>Initial Business Setup</h3><p>Products are empty. Create Nature Gen Distributaion's starting products and stock with one click.</p><button id="seedBtn" class="btn primary">Initialize Aimacid + Iron Data</button></div>`:''}<div class="card setup-card" style="margin-top:16px"><h3>Controlled Workflow Setup</h3><p>Ensures invoice/customer/expense counters and a Main Cash account exist without removing existing data.</p><button id="controlSetupBtn" class="btn ghost">Initialize / Repair Control Data</button></div>${can('admin')?`<div class="card setup-card" style="margin-top:16px;border:1px solid #efb4b4"><h3>Fresh Start / Zero Operational Data</h3><p>Preserves Admin, Marketing Director and ERP Manager accounts plus company settings. Removes Salesmen and other non-management profiles, Products, Customers, Invoices, Payments, Stock Movements, Ledger, Expenses and Cash/Bank accounts. Counters restart from 1. Audit Trail and backups are preserved for traceability.</p><button id="freshResetBtn" class="btn danger">Zero Operational Data</button></div>`:''}<div class="card" style="max-width:760px;margin-top:16px"><h3>Company Settings</h3><form id="settingsForm" class="form-grid"><label>Company Name<input id="setName" value="${esc(COMPANY_NAME)}"></label><label>Phone<input id="setPhone" value="${esc(s.phone||'')}"></label><label class="full">Address<textarea id="setAddress">${esc(s.address||'')}</textarea></label><label>Monthly Profit Target<input id="setTarget" type="number" min="0" step="0.01" value="${s.monthlyProfitTarget||100000}"></label><div class="full"><button class="btn primary">Save Settings</button></div></form></div><div class="section-head"><h3>Cash / Bank Accounts</h3><button id="addAccountBtn" class="btn primary">+ Add Account</button></div><div class="table-wrap"><table class="table"><thead><tr><th>Name</th><th>Type</th><th>Balance</th><th>Status</th></tr></thead><tbody>${state.accounts.map(a=>`<tr><td><b>${esc(a.name)}</b></td><td>${esc(a.type||'')}</td><td>${money(a.balance)}</td><td>${a.active!==false?'Active':'Inactive'}</td></tr>`).join('')||'<tr><td colspan="4" class="empty">No accounts yet. Initialize control data to create Main Cash.</td></tr>'}</tbody></table></div>`;
+  if($('#seedBtn')) $('#seedBtn').onclick=seedInitialData; $('#controlSetupBtn').onclick=initializeControlData; if($('#freshResetBtn')) $('#freshResetBtn').onclick=openFreshResetForm; $('#addAccountBtn').onclick=openAccountForm;
   $('#settingsForm').onsubmit=async e=>{e.preventDefault();try{await setDoc(doc(db,'settings','company'),{companyName:COMPANY_NAME,phone:$('#setPhone').value.trim(),address:$('#setAddress').value.trim(),monthlyProfitTarget:Number($('#setTarget').value||0),updatedAt:serverTimestamp()},{merge:true});await writeAudit('company_settings_updated','settings','company',{});toast('Settings saved.');}catch(err){toast(err.message,true);}};
 }
+async function deleteDocsInChunks(docs){
+  for(let i=0;i<docs.length;i+=350){
+    const batch=writeBatch(db);
+    docs.slice(i,i+350).forEach(d=>batch.delete(d.ref));
+    await batch.commit();
+  }
+}
+async function resetCollection(name,filterFn=null){
+  const snap=await getDocs(collection(db,name));
+  const docs=filterFn?snap.docs.filter(d=>filterFn({id:d.id,...d.data()})):snap.docs;
+  if(docs.length)await deleteDocsInChunks(docs);
+  return docs.length;
+}
+function openFreshResetForm(){
+  if(!can('admin'))return;
+  showModal('Fresh Start — Zero Operational Data',`<form id="freshResetForm" class="stack">
+    <div class="danger-note"><b>Permanent operational reset.</b><br>Admin, Marketing Director and ERP Manager profiles plus company settings remain. Salesmen and other non-management profiles, products, customers, invoices, stock, ledger, payments, expenses and cash/bank accounts are removed. Audit Trail and backups remain.</div>
+    <label>Type <b>RESET NATURE GEN</b> to confirm<input id="freshResetConfirm" autocomplete="off" required></label>
+    <label>Reason<textarea id="freshResetReason" required>Fresh operational start</textarea></label>
+    <button class="btn danger">Backup & Reset to Zero</button>
+  </form>`);
+  $('#freshResetForm').onsubmit=async e=>{
+    e.preventDefault();
+    if($('#freshResetConfirm').value.trim()!=='RESET NATURE GEN')return toast('Confirmation text does not match.',true);
+    const reason=$('#freshResetReason').value.trim();if(!reason)return;
+    const btn=e.submitter;if(btn)btn.disabled=true;
+    try{
+      setSync('Creating safety backup…');
+      try{
+        const snapshot=await buildBackupSnapshot();
+        downloadBlob(JSON.stringify(cleanBackupValue(snapshot),null,2),`nature-gen-pre-reset-${todayISO()}.json`,'application/json');
+      }catch(err){console.warn('Pre-reset backup download',err);}
+      setSync('Resetting operational data…');
+      const removed={};
+      for(const name of ['payments','ledgerEntries','stockMovements','expenses','sales','invoiceSubmissionLocks','customerIndex','customers','products','cashBankAccounts','counters']){
+        removed[name]=await resetCollection(name);
+      }
+      removed.users=await resetCollection('users',u=>!['admin','marketing_director','erp_manager'].includes(u.role));
+      const now=Timestamp.now();
+      await setDoc(doc(db,'counters','invoice'),{next:1,createdAt:now});
+      await setDoc(doc(db,'counters','customer'),{next:1,createdAt:now});
+      await setDoc(doc(db,'counters','expense'),{next:1,createdAt:now});
+      await setDoc(doc(db,'cashBankAccounts','cash-main'),{name:'Main Cash',type:'cash',balance:0,active:true,createdAt:now,updatedAt:now});
+      await setDoc(doc(db,'settings','company'),{companyName:COMPANY_NAME,operationalResetAt:now,updatedAt:now},{merge:true});
+      await writeAudit('operational_data_reset','settings','fresh-start',{reason,removed,countersRestartedAt:1,preservedRoles:['admin','marketing_director','erp_manager'],auditPreserved:true,backupsPreserved:true});
+      closeModal();setSync('Fresh operational data ready.');toast('Operational data reset to zero. Management accounts were preserved.');await startLiveData();go('dashboard');
+    }catch(err){console.error(err);toast(err.message||'Reset could not be completed.',true);setSync('Reset error');if(btn)btn.disabled=false;}
+  };
+}
+
 function openAccountForm(){
   showModal('Add Cash / Bank Account',`<form id="accountForm" class="form-grid"><label>Account Name<input id="accName" required></label><label>Type<select id="accType"><option value="cash">Cash</option><option value="bank">Bank</option><option value="wallet">Wallet</option></select></label><label>Opening Balance<input id="accBalance" type="number" step="0.01" value="0"></label><div class="full"><button class="btn primary">Create Account</button></div></form>`);
   $('#accountForm').onsubmit=async e=>{e.preventDefault();try{const ref=doc(collection(db,'cashBankAccounts')),now=Timestamp.now();await setDoc(ref,{name:$('#accName').value.trim(),type:$('#accType').value,balance:Number($('#accBalance').value||0),active:true,createdBy:state.user.uid,createdAt:now,updatedAt:now});await writeAudit('cash_bank_account_created','account',ref.id,{name:$('#accName').value.trim(),type:$('#accType').value,openingBalance:Number($('#accBalance').value||0)});closeModal();toast('Account created.');}catch(err){toast(err.message,true);}};
 }
 async function ensureCompanyBranding(){
-  if(!can('admin','erp_manager'))return;
+  if(!canManagementCreate())return;
   try{
     const ref=doc(db,'settings','company'), snap=await getDoc(ref);
     if(!snap.exists() || snap.data().companyName!==COMPANY_NAME){
