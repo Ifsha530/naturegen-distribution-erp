@@ -597,17 +597,75 @@ function openLedgerAdjustment(customerId){
 
 function renderInventory(){
   if(!can('admin','erp_manager','inventory')) return;
-  $('#inventoryPage').innerHTML=`<div class="section-head"><div><h3>Inventory</h3><div class="muted">Live stock shared across all users</div></div><button id="stockAdjustBtn" class="btn primary">+ Stock Movement</button></div><div class="table-wrap"><table class="table"><thead><tr><th>SKU</th><th>Product</th><th>Stock</th><th>Low Alert</th><th>MRP</th><th>Sale Price</th><th>Scheme</th><th></th></tr></thead><tbody>${state.products.map(p=>`<tr><td>${esc(p.sku||'')}</td><td><b>${esc(p.name)}</b></td><td>${fmt(p.stockQty)}</td><td>${fmt(p.lowStockThreshold)}</td><td>${money(p.mrp)}</td><td>${money(p.salePrice)}</td><td>${fmt(p.schemeBuy)}+${fmt(p.schemeFree)}</td><td>${can('admin','erp_manager')?`<button class="btn ghost small" data-product-edit="${p.id}">Edit</button>`:''}</td></tr>`).join('')||'<tr><td colspan="8" class="empty">No products. Admin can initialize default data in Settings.</td></tr>'}</tbody></table></div><div class="section-head"><h3>Recent Stock Movements</h3></div><div class="table-wrap"><table class="table"><thead><tr><th>Date</th><th>Product</th><th>Type</th><th>Qty Change</th><th>Balance</th><th>Notes</th></tr></thead><tbody>${state.movements.filter(m=>m.hiddenOperational!==true && !state.sales.some(s=>isOperationallyHiddenSale(s)&&s.id===m.refId)).slice(0,100).map(m=>`<tr><td>${dt(m.createdAt)}</td><td>${esc(m.productName||productName(m.productId))}</td><td>${esc(m.movementType)}</td><td>${fmt(m.qtyChange)}</td><td>${fmt(m.balanceAfter)}</td><td>${esc(m.notes||'')}</td></tr>`).join('')}</tbody></table></div>`;
-  $('#stockAdjustBtn').onclick=openStockForm; $$('[data-product-edit]').forEach(b=>b.onclick=()=>openProductForm(b.dataset.productEdit));
+  $('#inventoryPage').innerHTML=`<div class="section-head"><div><h3>Inventory</h3><div class="muted">Live stock shared across all users</div></div><div class="actions">${can('admin','erp_manager')?'<button id="addProductBtn" class="btn primary">+ Add Product</button>':''}<button id="stockAdjustBtn" class="btn ghost">+ Stock Movement</button></div></div><div class="table-wrap"><table class="table"><thead><tr><th>SKU</th><th>Product</th><th>Category</th><th>Pack</th><th>Stock</th><th>Low Alert</th><th>MRP</th><th>Sale Price</th><th>Scheme</th><th></th></tr></thead><tbody>${state.products.map(p=>`<tr><td>${esc(p.sku||'')}</td><td><b>${esc(p.name)}</b></td><td>${esc(p.category||'—')}</td><td>${esc(p.packSize||'—')}</td><td>${fmt(p.stockQty)}</td><td>${fmt(p.lowStockThreshold)}</td><td>${money(p.mrp)}</td><td>${money(p.salePrice)}</td><td>${fmt(p.schemeBuy)}+${fmt(p.schemeFree)}</td><td>${can('admin','erp_manager')?`<button class="btn ghost small" data-product-edit="${p.id}">Edit</button>`:''}</td></tr>`).join('')||'<tr><td colspan="10" class="empty">No products yet. Admin / ERP Manager can add the first product here.</td></tr>'}</tbody></table></div><div class="section-head"><h3>Recent Stock Movements</h3></div><div class="table-wrap"><table class="table"><thead><tr><th>Date</th><th>Product</th><th>Type</th><th>Qty Change</th><th>Balance</th><th>Notes</th></tr></thead><tbody>${state.movements.filter(m=>m.hiddenOperational!==true && !state.sales.some(s=>isOperationallyHiddenSale(s)&&s.id===m.refId)).slice(0,100).map(m=>`<tr><td>${dt(m.createdAt)}</td><td>${esc(m.productName||productName(m.productId))}</td><td>${esc(m.movementType)}</td><td>${fmt(m.qtyChange)}</td><td>${fmt(m.balanceAfter)}</td><td>${esc(m.notes||'')}</td></tr>`).join('')}</tbody></table></div>`;
+  if($('#addProductBtn')) $('#addProductBtn').onclick=openAddProductForm;
+  $('#stockAdjustBtn').onclick=openStockForm;
+  $('[data-product-edit]').forEach(b=>b.onclick=()=>openProductForm(b.dataset.productEdit));
 }
 function openStockForm(){
   showModal('Stock Movement',`<form id="stockForm" class="form-grid"><label>Product<select id="stProduct" required><option value="">Select</option>${activeProducts().map(p=>`<option value="${p.id}">${esc(p.name)} — Stock ${fmt(p.stockQty)}</option>`).join('')}</select></label><label>Type<select id="stType"><option value="production_received">Production Received</option><option value="purchase_received">Purchase Received</option><option value="sales_return">Sales Return</option><option value="damage">Damage / Breakage</option><option value="adjustment_plus">Adjustment +</option><option value="adjustment_minus">Adjustment -</option></select></label><label>Quantity<input id="stQty" type="number" min="1" step="1" required></label><label class="full">Notes<textarea id="stNotes"></textarea></label><div class="full"><button class="btn primary">Save Movement</button></div></form>`);
   $('#stockForm').onsubmit=async e=>{e.preventDefault();const productId=$('#stProduct').value,type=$('#stType').value,qty=Math.floor(Number($('#stQty').value||0));if(!productId||qty<=0)return;const negative=['damage','adjustment_minus'].includes(type),delta=negative?-qty:qty,pRef=doc(db,'products',productId),mRef=doc(collection(db,'stockMovements'));try{await runTransaction(db,async tx=>{const ps=await tx.get(pRef);if(!ps.exists())throw new Error('Product not found.');const p=ps.data(),old=Number(p.stockQty||0),bal=old+delta;if(bal<0)throw new Error(`Only ${old} units available.`);tx.update(pRef,{stockQty:bal,updatedAt:Timestamp.now()});tx.set(mRef,{productId,productName:p.name,movementType:type,qtyChange:delta,balanceAfter:bal,refType:'manual',refId:'',notes:$('#stNotes').value.trim(),enteredBy:state.user.uid,createdAt:Timestamp.now()});});closeModal();toast('Stock updated.');}catch(err){toast(err.message,true);}};
 }
+function openAddProductForm(){
+  if(!can('admin','erp_manager')) return toast('Only Admin / ERP Manager can add products.',true);
+  showModal('Add Product',`<form id="addProductForm" class="form-grid">
+    <label>SKU / Product Code<input id="npSku" required placeholder="e.g. AIMACID-120"></label>
+    <label>Product Name<input id="npName" required></label>
+    <label>Category<select id="npCategory"><option value="Pharmaceutical">Pharmaceutical</option><option value="Herbal">Herbal</option><option value="Nutraceutical">Nutraceutical</option><option value="Cosmetic">Cosmetic</option><option value="Other">Other</option></select></label>
+    <label>Pack Size<input id="npPack" placeholder="e.g. 120 ml / 30 Tablets"></label>
+    <label>MRP<input id="npMrp" type="number" min="0" step="0.01" value="0"></label>
+    <label>Sale Price<input id="npSale" type="number" min="0" step="0.01" value="0"></label>
+    <label>Purchase / Cost Price<input id="npCost" type="number" min="0" step="0.01" value="0"></label>
+    <label>Opening Stock<input id="npOpening" type="number" min="0" step="1" value="0"></label>
+    <label>Low Stock Alert<input id="npLow" type="number" min="0" step="1" value="0"></label>
+    <label>Scheme Buy Qty<input id="npBuy" type="number" min="0" step="1" value="0"></label>
+    <label>Scheme Free Qty<input id="npFree" type="number" min="0" step="1" value="0"></label>
+    <label>Active<select id="npActive"><option value="true">Yes</option><option value="false">No</option></select></label>
+    <label class="full">Opening Stock Notes<textarea id="npNotes" placeholder="Optional"></textarea></label>
+    <div class="full help">Product save hote hi invoice product list mein available hoga. Opening Stock inventory history mein separate opening movement ke taur par save hoga.</div>
+    <div class="full"><button class="btn primary">Create Product</button></div>
+  </form>`);
+  $('#addProductForm').onsubmit=async e=>{
+    e.preventDefault();
+    const sku=$('#npSku').value.trim(), name=$('#npName').value.trim();
+    if(!sku||!name)return;
+    const duplicate=state.products.find(p=>normalizeKey(p.sku)===normalizeKey(sku)||normalizeKey(p.name)===normalizeKey(name));
+    if(duplicate)return toast(`Product already exists: ${duplicate.sku||''} ${duplicate.name||''}`,true);
+    const openingStock=Math.max(0,Math.floor(Number($('#npOpening').value||0)));
+    const productRef=doc(collection(db,'products')), movementRef=doc(collection(db,'stockMovements'));
+    const now=Timestamp.now();
+    const productData={
+      sku,name,
+      category:$('#npCategory').value,
+      packSize:$('#npPack').value.trim(),
+      mrp:Math.max(0,Number($('#npMrp').value||0)),
+      salePrice:Math.max(0,Number($('#npSale').value||0)),
+      costPrice:Math.max(0,Number($('#npCost').value||0)),
+      stockQty:openingStock,
+      lowStockThreshold:Math.max(0,Math.floor(Number($('#npLow').value||0))),
+      schemeBuy:Math.max(0,Math.floor(Number($('#npBuy').value||0))),
+      schemeFree:Math.max(0,Math.floor(Number($('#npFree').value||0))),
+      active:$('#npActive').value==='true',
+      createdBy:state.user.uid,createdByName:state.me?.fullName||'',
+      createdAt:now,updatedAt:now
+    };
+    try{
+      await runTransaction(db,async tx=>{
+        tx.set(productRef,productData);
+        if(openingStock>0){
+          tx.set(movementRef,{productId:productRef.id,productName:name,movementType:'opening',qtyChange:openingStock,balanceAfter:openingStock,refType:'product_creation',refId:productRef.id,notes:$('#npNotes').value.trim()||'Opening stock at product creation',enteredBy:state.user.uid,createdAt:now});
+        }
+        auditSet(tx,'product_created','product',productRef.id,{sku,name,category:productData.category,packSize:productData.packSize,openingStock,mrp:productData.mrp,salePrice:productData.salePrice,costPrice:productData.costPrice});
+      });
+      closeModal();toast(`Product created: ${name}`);
+    }catch(err){console.error(err);toast(err.message||'Product could not be created.',true);}
+  };
+}
+
 function openProductForm(id){
   const p=state.products.find(x=>x.id===id); if(!p)return;
-  showModal('Edit Product',`<form id="productForm" class="form-grid"><label>SKU<input id="pSku" value="${esc(p.sku||'')}"></label><label>Name<input id="pName" required value="${esc(p.name)}"></label><label>MRP<input id="pMrp" type="number" min="0" step="0.01" value="${p.mrp||0}"></label><label>Sale Price<input id="pSale" type="number" min="0" step="0.01" value="${p.salePrice||0}"></label><label>Cost Price<input id="pCost" type="number" min="0" step="0.01" value="${p.costPrice||0}"></label><label>Low Stock Alert<input id="pLow" type="number" min="0" step="1" value="${p.lowStockThreshold||0}"></label><label>Scheme Buy<input id="pBuy" type="number" min="0" step="1" value="${p.schemeBuy||0}"></label><label>Scheme Free<input id="pFree" type="number" min="0" step="1" value="${p.schemeFree||0}"></label><label>Active<select id="pActive"><option value="true" ${p.active!==false?'selected':''}>Yes</option><option value="false" ${p.active===false?'selected':''}>No</option></select></label><div class="full"><button class="btn primary">Save Product</button></div></form>`);
-  $('#productForm').onsubmit=async e=>{e.preventDefault();try{await updateDoc(doc(db,'products',id),{sku:$('#pSku').value.trim(),name:$('#pName').value.trim(),mrp:Number($('#pMrp').value||0),salePrice:Number($('#pSale').value||0),costPrice:Number($('#pCost').value||0),lowStockThreshold:Number($('#pLow').value||0),schemeBuy:Number($('#pBuy').value||0),schemeFree:Number($('#pFree').value||0),active:$('#pActive').value==='true',updatedAt:serverTimestamp()});closeModal();toast('Product updated.');}catch(err){toast(err.message,true);}};
+  showModal('Edit Product',`<form id="productForm" class="form-grid"><label>SKU<input id="pSku" value="${esc(p.sku||'')}"></label><label>Name<input id="pName" required value="${esc(p.name)}"></label><label>Category<input id="pCategory" value="${esc(p.category||'')}"></label><label>Pack Size<input id="pPack" value="${esc(p.packSize||'')}"></label><label>MRP<input id="pMrp" type="number" min="0" step="0.01" value="${p.mrp||0}"></label><label>Sale Price<input id="pSale" type="number" min="0" step="0.01" value="${p.salePrice||0}"></label><label>Cost Price<input id="pCost" type="number" min="0" step="0.01" value="${p.costPrice||0}"></label><label>Low Stock Alert<input id="pLow" type="number" min="0" step="1" value="${p.lowStockThreshold||0}"></label><label>Scheme Buy<input id="pBuy" type="number" min="0" step="1" value="${p.schemeBuy||0}"></label><label>Scheme Free<input id="pFree" type="number" min="0" step="1" value="${p.schemeFree||0}"></label><label>Active<select id="pActive"><option value="true" ${p.active!==false?'selected':''}>Yes</option><option value="false" ${p.active===false?'selected':''}>No</option></select></label><div class="full"><button class="btn primary">Save Product</button></div></form>`);
+  $('#productForm').onsubmit=async e=>{e.preventDefault();try{const sku=$('#pSku').value.trim(),name=$('#pName').value.trim();const duplicate=state.products.find(x=>x.id!==id&&(normalizeKey(x.sku)===normalizeKey(sku)||normalizeKey(x.name)===normalizeKey(name)));if(duplicate)return toast(`Product already exists: ${duplicate.sku||''} ${duplicate.name||''}`,true);await updateDoc(doc(db,'products',id),{sku,name,category:$('#pCategory').value.trim(),packSize:$('#pPack').value.trim(),mrp:Number($('#pMrp').value||0),salePrice:Number($('#pSale').value||0),costPrice:Number($('#pCost').value||0),lowStockThreshold:Number($('#pLow').value||0),schemeBuy:Number($('#pBuy').value||0),schemeFree:Number($('#pFree').value||0),active:$('#pActive').value==='true',updatedAt:serverTimestamp()});closeModal();toast('Product updated.');}catch(err){toast(err.message,true);}};
 }
 
 function renderRecovery(){
