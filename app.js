@@ -11,6 +11,7 @@ import {
 const C = window.NATUREGEN_FIREBASE_CONFIG || {};
 const COMPANY_NAME = 'Nature Gen Distributaion';
 const COMPANY_SHORT_NAME = 'Nature Gen';
+const FRESH_RESET_VERSION = '2026-11-05-fresh-start-v1';
 const configured = Boolean(
   C.apiKey && C.projectId && C.appId &&
   !String(C.apiKey).includes('PASTE_') && !String(C.projectId).includes('PASTE_') && !String(C.appId).includes('PASTE_')
@@ -802,6 +803,49 @@ async function resetCollection(name,filterFn=null){
   if(docs.length)await deleteDocsInChunks(docs);
   return docs.length;
 }
+async function performFreshOperationalReset(reason='Fresh operational start',automatic=false){
+  if(!can('admin'))throw new Error('Admin permission required for fresh reset.');
+  const companyRef=doc(db,'settings','company');
+  const companySnap=await getDoc(companyRef);
+  if(companySnap.exists()&&companySnap.data().operationalResetVersion===FRESH_RESET_VERSION){
+    return {alreadyDone:true,removed:{}};
+  }
+  setSync('Creating pre-reset stored backup…');
+  const backupId=await createStoredBackup('pre_reset',true);
+  setSync('Resetting operational data…');
+  const removed={};
+  for(const name of ['payments','ledgerEntries','stockMovements','expenses','sales','invoiceSubmissionLocks','customerIndex','customers','products','cashBankAccounts','counters']){
+    removed[name]=await resetCollection(name);
+  }
+  removed.users=await resetCollection('users',u=>!['admin','marketing_director','erp_manager'].includes(u.role));
+  const now=Timestamp.now();
+  await setDoc(doc(db,'counters','invoice'),{next:1,createdAt:now});
+  await setDoc(doc(db,'counters','customer'),{next:1,createdAt:now});
+  await setDoc(doc(db,'counters','expense'),{next:1,createdAt:now});
+  await setDoc(doc(db,'cashBankAccounts','cash-main'),{name:'Main Cash',type:'cash',balance:0,active:true,createdAt:now,updatedAt:now});
+  await setDoc(companyRef,{companyName:COMPANY_NAME,operationalResetAt:now,operationalResetVersion:FRESH_RESET_VERSION,operationalResetBy:state.user.uid,preResetBackupId:backupId,updatedAt:now},{merge:true});
+  await writeAudit('operational_data_reset','settings','fresh-start',{reason,automatic,removed,countersRestartedAt:1,preservedRoles:['admin','marketing_director','erp_manager'],auditPreserved:true,backupsPreserved:true,preResetBackupId:backupId,resetVersion:FRESH_RESET_VERSION});
+  setSync('Fresh operational data ready.');
+  return {alreadyDone:false,removed,backupId};
+}
+async function maybeRunOneTimeFreshReset(){
+  if(!can('admin'))return;
+  try{
+    const snap=await getDoc(doc(db,'settings','company'));
+    if(snap.exists()&&snap.data().operationalResetVersion===FRESH_RESET_VERSION)return;
+    toast('One-time fresh reset started. Management accounts will be preserved.');
+    const result=await performFreshOperationalReset('Approved fresh operational start',true);
+    if(!result.alreadyDone){
+      await startLiveData();
+      go('dashboard');
+      toast('Fresh start completed. Operational data is now zero.');
+    }
+  }catch(err){
+    console.error('One-time fresh reset',err);
+    toast('Fresh reset could not run: '+(err.message||err),true);
+    setSync('Fresh reset pending');
+  }
+}
 function openFreshResetForm(){
   if(!can('admin'))return;
   showModal('Fresh Start — Zero Operational Data',`<form id="freshResetForm" class="stack">
@@ -816,25 +860,11 @@ function openFreshResetForm(){
     const reason=$('#freshResetReason').value.trim();if(!reason)return;
     const btn=e.submitter;if(btn)btn.disabled=true;
     try{
-      setSync('Creating safety backup…');
-      try{
-        const snapshot=await buildBackupSnapshot();
-        downloadBlob(JSON.stringify(cleanBackupValue(snapshot),null,2),`nature-gen-pre-reset-${todayISO()}.json`,'application/json');
-      }catch(err){console.warn('Pre-reset backup download',err);}
-      setSync('Resetting operational data…');
-      const removed={};
-      for(const name of ['payments','ledgerEntries','stockMovements','expenses','sales','invoiceSubmissionLocks','customerIndex','customers','products','cashBankAccounts','counters']){
-        removed[name]=await resetCollection(name);
-      }
-      removed.users=await resetCollection('users',u=>!['admin','marketing_director','erp_manager'].includes(u.role));
-      const now=Timestamp.now();
-      await setDoc(doc(db,'counters','invoice'),{next:1,createdAt:now});
-      await setDoc(doc(db,'counters','customer'),{next:1,createdAt:now});
-      await setDoc(doc(db,'counters','expense'),{next:1,createdAt:now});
-      await setDoc(doc(db,'cashBankAccounts','cash-main'),{name:'Main Cash',type:'cash',balance:0,active:true,createdAt:now,updatedAt:now});
-      await setDoc(doc(db,'settings','company'),{companyName:COMPANY_NAME,operationalResetAt:now,updatedAt:now},{merge:true});
-      await writeAudit('operational_data_reset','settings','fresh-start',{reason,removed,countersRestartedAt:1,preservedRoles:['admin','marketing_director','erp_manager'],auditPreserved:true,backupsPreserved:true});
-      closeModal();setSync('Fresh operational data ready.');toast('Operational data reset to zero. Management accounts were preserved.');await startLiveData();go('dashboard');
+      const result=await performFreshOperationalReset(reason,false);
+      closeModal();
+      if(result.alreadyDone)toast('Fresh reset was already completed.');
+      else toast('Operational data reset to zero. Management accounts were preserved.');
+      await startLiveData();go('dashboard');
     }catch(err){console.error(err);toast(err.message||'Reset could not be completed.',true);setSync('Reset error');if(btn)btn.disabled=false;}
   };
 }
@@ -905,7 +935,7 @@ async function init(){
     try{
       const me=await loadProfile(user);
       if(!me){ $('#accessWarning').classList.remove('hidden'); await signOut(auth); return; }
-      $('#accessWarning').classList.add('hidden'); state.me=me; $('#userName').textContent=me.fullName||user.email; $('#userRole').textContent=me.role; showApp(); renderNav(); go('dashboard'); setSync('Connecting live data…'); await startLiveData(); if(can('admin','erp_manager'))setTimeout(()=>ensureCompanyBranding(),700); if(canManageBackups())setTimeout(()=>maybeRunScheduledBackup(),1200);
+      $('#accessWarning').classList.add('hidden'); state.me=me; $('#userName').textContent=me.fullName||user.email; $('#userRole').textContent=me.role; showApp(); renderNav(); go('dashboard'); setSync('Connecting live data…'); await startLiveData(); if(can('admin'))setTimeout(()=>maybeRunOneTimeFreshReset(),500); if(can('admin','erp_manager'))setTimeout(()=>ensureCompanyBranding(),1200); if(canManageBackups())setTimeout(()=>maybeRunScheduledBackup(),1800);
     }catch(err){console.error(err);toast(err.message,true);await signOut(auth);}
   });
 }
