@@ -420,7 +420,7 @@ function openBatchStatus(id){
   modal('Batch Status — '+b.batchNo,'<form id="batchStatusForm" class="form-grid"><label>Current<input value="'+e(b.status||'')+'" disabled></label><label>New Status<select id="bsStatus"><option value="saleable">Saleable</option><option value="quarantine">Quarantine</option><option value="recalled">Recalled</option><option value="rejected">Rejected</option><option value="expired">Expired</option><option value="returned">Returned to Supplier</option></select></label><label class="full">Reason<textarea id="bsReason" required></textarea></label><div class="full"><button class="btn primary">Update Batch Status</button></div></form>');
   $('#bsStatus').value=b.status||'saleable';
   $('#batchStatusForm').onsubmit=async function(ev){
-    ev.preventDefault();const next=$('#bsStatus').value,reason=$('#bsReason').value.trim();if(!reason)return;
+    ev.preventDefault();const next=$('#bsStatus').value,reason=$('#bsReason').value.trim();if(!reason)return;if(next==='saleable'&&expired(b.expiryDate))return toast('Expired batch cannot be released to saleable stock.',true);
     const bref=doc(db(),'inventoryBatches',id),pref=doc(db(),'products',b.productId);
     try{
       await runTransaction(db(),async function(tx){
@@ -463,7 +463,7 @@ function openReturnForm(){
 function openReturnDisposition(id){
   const r=state().regReturns.find(x=>x.id===id);if(!r)return;
   modal('Return Disposition — '+(r.returnNo||''),'<form id="returnDispForm" class="form-grid"><label>Decision<select id="rdDecision"><option value="released">Release to Saleable Stock</option><option value="rejected">Reject / Destroy / Return to Supplier</option></select></label><label class="full">Assessment / Reason<textarea id="rdReason" required></textarea></label><div class="full"><button class="btn primary">Post Disposition</button></div></form>');
-  $('#returnDispForm').onsubmit=async function(ev){ev.preventDefault();const decision=$('#rdDecision').value,reason=$('#rdReason').value.trim();if(!reason)return;const rr=doc(db(),'distributionReturns',id),br=doc(db(),'inventoryBatches',r.batchId),pr=doc(db(),'products',r.productId),now=Timestamp.now();try{await runTransaction(db(),async function(tx){const rs=await tx.get(rr),bs=await tx.get(br),ps=await tx.get(pr);if(!rs.exists()||rs.data().status!=='quarantine')throw new Error('Return is no longer awaiting disposition.');if(decision==='released'){if(!bs.exists()||!ps.exists())throw new Error('Original batch/product missing.');if(expired(bs.data().expiryDate))throw new Error('Expired returned stock cannot be released.');const qty=Number(rs.data().qty||0),newBatch=Number(bs.data().availableQty||0)+qty,newStock=Number(ps.data().stockQty||0)+qty;tx.update(br,{availableQty:newBatch,updatedAt:now});tx.update(pr,{stockQty:newStock,updatedAt:now});tx.set(doc(collection(db(),'stockMovements')),{productId:r.productId,productName:ps.data().name,batchId:r.batchId,batchNo:r.batchNo,movementType:'return_released',qtyChange:qty,balanceAfter:newStock,refType:'return',refId:id,notes:reason,enteredBy:state().user.uid,createdAt:now});}tx.update(rr,{status:decision,dispositionReason:reason,dispositionBy:state().user.uid,dispositionAt:now,updatedAt:now});C().auditSet(tx,'return_disposition','return',id,{decision,reason,qty:r.qty,productId:r.productId,batchNo:r.batchNo});});close();toast('Return disposition posted.');}catch(err){toast(err.message,true);}};
+  $('#returnDispForm').onsubmit=async function(ev){ev.preventDefault();const decision=$('#rdDecision').value,reason=$('#rdReason').value.trim();if(!reason)return;const rr=doc(db(),'distributionReturns',id),br=doc(db(),'inventoryBatches',r.batchId),pr=doc(db(),'products',r.productId),now=Timestamp.now();try{await runTransaction(db(),async function(tx){const rs=await tx.get(rr),bs=await tx.get(br),ps=await tx.get(pr);if(!rs.exists()||rs.data().status!=='quarantine')throw new Error('Return is no longer awaiting disposition.');if(decision==='released'){if(!bs.exists()||!ps.exists())throw new Error('Original batch/product missing.');if(expired(bs.data().expiryDate))throw new Error('Expired returned stock cannot be released.');if(bs.data().status!=='saleable')throw new Error('Original batch is not currently saleable; keep the return quarantined/rejected.');const qty=Number(rs.data().qty||0),newBatch=Number(bs.data().availableQty||0)+qty,newStock=Number(ps.data().stockQty||0)+qty;tx.update(br,{availableQty:newBatch,updatedAt:now});tx.update(pr,{stockQty:newStock,updatedAt:now});tx.set(doc(collection(db(),'stockMovements')),{productId:r.productId,productName:ps.data().name,batchId:r.batchId,batchNo:r.batchNo,movementType:'return_released',qtyChange:qty,balanceAfter:newStock,refType:'return',refId:id,notes:reason,enteredBy:state().user.uid,createdAt:now});}tx.update(rr,{status:decision,dispositionReason:reason,dispositionBy:state().user.uid,dispositionAt:now,updatedAt:now});C().auditSet(tx,'return_disposition','return',id,{decision,reason,qty:r.qty,productId:r.productId,batchNo:r.batchNo});});close();toast('Return disposition posted.');}catch(err){toast(err.message,true);}};
 }
 
 function openRecallForm(id){
@@ -581,14 +581,23 @@ export async function applyFefoToApproval(tx,saleData,now){
 
 export async function restoreSaleBatches(tx,saleData,now,reason){
   const allocations=[];(saleData.items||[]).forEach(function(item){(item.batchAllocations||[]).forEach(function(a){allocations.push({item,a});});});
-  if(!allocations.length)return false;
+  if(!allocations.length)return {};
   const ids=Array.from(new Set(allocations.map(x=>x.a.batchId).filter(Boolean))),snaps=new Map();
   for(const id of ids){snaps.set(id,await tx.get(doc(db(),'inventoryBatches',id)));}
-  const additions=new Map();allocations.forEach(x=>additions.set(x.a.batchId,(additions.get(x.a.batchId)||0)+Number(x.a.qty||0)));
-  for(const [id,qty] of additions){const snap=snaps.get(id);if(!snap?.exists())continue;const z=snap.data();tx.update(doc(db(),'inventoryBatches',id),{availableQty:Number(z.availableQty||0)+qty,updatedAt:now,lastReturnAt:now});}
+  const additions=new Map(),saleableByProduct={};
+  allocations.forEach(x=>additions.set(x.a.batchId,(additions.get(x.a.batchId)||0)+Number(x.a.qty||0)));
+  for(const [id,qty] of additions){
+    const snap=snaps.get(id);if(!snap?.exists())continue;
+    const z=snap.data();
+    tx.update(doc(db(),'inventoryBatches',id),{availableQty:Number(z.availableQty||0)+qty,updatedAt:now,lastReturnAt:now});
+    if(z.status==='saleable'&&!expired(z.expiryDate)){
+      const productId=z.productId;
+      saleableByProduct[productId]=(saleableByProduct[productId]||0)+qty;
+    }
+  }
   allocations.forEach(function(x){
     const p=productById(x.item.productId);
     if(p?.controlledDrug===true)tx.set(doc(collection(db(),'controlledDrugRegister')),{productId:x.item.productId,batchId:x.a.batchId,batchNo:x.a.batchNo,transactionType:'invoice_cancel_return',qtyIn:Number(x.a.qty||0),qtyOut:0,reference:saleData.invoiceNo,partyName:customerName(saleData.customerId),saleId:saleData.id||'',notes:reason||'',transactionDate:now,enteredBy:state().user.uid,enteredByName:state().me?.fullName||'',createdAt:now,automatic:true});
   });
-  return true;
+  return saleableByProduct;
 }
