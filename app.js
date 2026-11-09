@@ -7,6 +7,11 @@ import {
   getFirestore, collection, doc, getDoc, getDocs, setDoc, addDoc, updateDoc,
   query, where, onSnapshot, runTransaction, serverTimestamp, Timestamp, writeBatch
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
+import {
+  initRegulatoryContext, attachRegulatoryListeners, renderRegulatory,
+  applyFefoToApproval, restoreSaleBatches, batchText, expiryText,
+  validateCustomerLicense
+} from './regulatory.js?v=20261109-regulatory-v1';
 
 const C = window.NATUREGEN_FIREBASE_CONFIG || {};
 const COMPANY_NAME = 'Nature Gen Distributaion';
@@ -44,6 +49,7 @@ const sortAscText = (rows, field) => [...rows].sort((a,b)=>String(a[field]||'').
 const state = {
   user:null, me:null, page:'dashboard',
   products:[], customers:[], users:[], sales:[], payments:[], expenses:[], movements:[], ledgerEntries:[], auditTrail:[], accounts:[], backups:[], backupPolicy:null, settings:null,
+  regSuppliers:[], regGrns:[], regBatches:[], regTemperatureLogs:[], regReturns:[], regRecalls:[], regComplaints:[], regControlled:[], regInspections:[], regCapa:[], regCalibrations:[], regProfile:null,
   unsubs:[], liveReady:false
 };
 
@@ -123,10 +129,10 @@ function readSmallAttachment(file){
 }
 
 const navByRole = {
-  admin:[['dashboard','Dashboard','⌂'],['sales','Sales & Invoices','🧾'],['customers','Customers','◫'],['ledger','Customer Ledger','▤'],['inventory','Inventory','▣'],['recovery','Recovery','₨'],['expenses','Expenses','−'],['reports','Reports','▥'],['users','Users & Roles','♙'],['backup','Backup Center','⇩'],['audit','Audit Trail','☷'],['settings','Settings','⚙']],
-  marketing_director:[['dashboard','Dashboard','⌂'],['sales','Sales & Invoice Approval','🧾'],['customers','Customers','◫'],['ledger','Customer Ledger','▤'],['inventory','Inventory','▣'],['recovery','Recovery','₨'],['expenses','Expenses','−'],['reports','Reports','▥'],['users','Salesmen','♙']],
-  erp_manager:[['dashboard','Dashboard','⌂'],['sales','Sales & Invoices','🧾'],['customers','Customers','◫'],['ledger','Customer Ledger','▤'],['inventory','Inventory','▣'],['recovery','Recovery','₨'],['expenses','Expenses','−'],['reports','Reports','▥'],['users','Users & Roles','♙'],['backup','Backup Center','⇩'],['audit','Audit Trail','☷'],['settings','Settings','⚙']],
-  inventory:[['dashboard','Dashboard','⌂'],['sales','Invoices','🧾'],['customers','Customers','◫'],['inventory','Inventory','▣']],
+  admin:[['dashboard','Dashboard','⌂'],['sales','Sales & Invoices','🧾'],['customers','Customers','◫'],['ledger','Customer Ledger','▤'],['inventory','Inventory','▣'],['regulatory','Drug Inspector / GDP','⚕'],['recovery','Recovery','₨'],['expenses','Expenses','−'],['reports','Reports','▥'],['users','Users & Roles','♙'],['backup','Backup Center','⇩'],['audit','Audit Trail','☷'],['settings','Settings','⚙']],
+  marketing_director:[['dashboard','Dashboard','⌂'],['sales','Sales & Invoice Approval','🧾'],['customers','Customers','◫'],['ledger','Customer Ledger','▤'],['inventory','Inventory','▣'],['regulatory','Drug Inspector / GDP','⚕'],['recovery','Recovery','₨'],['expenses','Expenses','−'],['reports','Reports','▥'],['users','Salesmen','♙']],
+  erp_manager:[['dashboard','Dashboard','⌂'],['sales','Sales & Invoices','🧾'],['customers','Customers','◫'],['ledger','Customer Ledger','▤'],['inventory','Inventory','▣'],['regulatory','Drug Inspector / GDP','⚕'],['recovery','Recovery','₨'],['expenses','Expenses','−'],['reports','Reports','▥'],['users','Users & Roles','♙'],['backup','Backup Center','⇩'],['audit','Audit Trail','☷'],['settings','Settings','⚙']],
+  inventory:[['dashboard','Dashboard','⌂'],['sales','Invoices','🧾'],['customers','Customers','◫'],['inventory','Inventory','▣'],['regulatory','Drug Inspector / GDP','⚕']],
   salesman:[['dashboard','My Dashboard','⌂'],['sales','My Sales','🧾'],['customers','My Customers','◫'],['ledger','Customer Ledger','▤']],
   recovery:[['dashboard','Dashboard','⌂'],['sales','Invoices','🧾'],['customers','Customers','◫'],['ledger','Customer Ledger','▤'],['recovery','Recovery','₨']]
 };
@@ -142,7 +148,7 @@ function go(page){
   $('#pageTitle').textContent=(navByRole[role()]||[]).find(x=>x[0]===page)?.[1]||COMPANY_SHORT_NAME; renderNav(); renderPage();
 }
 function renderPage(){
-  const fn={dashboard:renderDashboard,sales:renderSales,customers:renderCustomers,ledger:renderLedger,inventory:renderInventory,recovery:renderRecovery,expenses:renderExpenses,reports:renderReports,users:renderUsers,backup:renderBackup,audit:renderAudit,settings:renderSettings}[state.page];
+  const fn={dashboard:renderDashboard,sales:renderSales,customers:renderCustomers,ledger:renderLedger,inventory:renderInventory,regulatory:renderRegulatory,recovery:renderRecovery,expenses:renderExpenses,reports:renderReports,users:renderUsers,backup:renderBackup,audit:renderAudit,settings:renderSettings}[state.page];
   if(fn) fn();
 }
 
@@ -188,6 +194,7 @@ async function startLiveData(){
   if(canManageBackups()){attachCollection('backupRuns','backups');state.unsubs.push(onSnapshot(doc(db,'settings','backup'),s=>{state.backupPolicy=s.exists()?{id:s.id,...s.data()}:null;if(state.page==='backup')renderBackup();}));}else{state.backups=[];state.backupPolicy=null;}
   if(can('admin','marketing_director','erp_manager')) attachCollection('cashBankAccounts','accounts'); else state.accounts=[];
   state.unsubs.push(onSnapshot(doc(db,'settings','company'), s=>{ state.settings=s.exists()?{id:s.id,...s.data()}:null; renderPage(); }));
+  attachRegulatoryListeners();
   state.liveReady=true;
 }
 
@@ -725,7 +732,7 @@ function renderReports(){
 }
 function salesmanSummaryTable(sales){ const reps=state.users.filter(p=>p.role==='salesman'); return `<div class="table-wrap"><table class="table"><thead><tr><th>Salesman</th><th>Route</th><th>Invoices</th><th>Sales</th><th>Collected</th><th>Outstanding</th><th>Free Units</th><th>Target</th><th>%</th></tr></thead><tbody>${reps.map(p=>{const ss=sales.filter(s=>s.salesmanId===p.id),v=ss.reduce((a,s)=>a+Number(s.total||0),0),rec=ss.reduce((a,s)=>a+Number(s.paidAmount||0),0),free=ss.reduce((x,s)=>x+(s.items||[]).reduce((a,i)=>a+Number(i.freeQty||0),0),0),pct=Number(p.monthlyTarget||0)>0?v/Number(p.monthlyTarget)*100:0;return `<tr><td>${esc(p.fullName)}</td><td>${esc(p.routeArea||'')}</td><td>${ss.length}</td><td>${money(v)}</td><td>${money(rec)}</td><td>${money(v-rec)}</td><td>${fmt(free)}</td><td>${money(p.monthlyTarget)}</td><td>${pct.toFixed(1)}%</td></tr>`}).join('')||'<tr><td colspan="9" class="empty">No salesmen.</td></tr>'}</tbody></table></div>`; }
 function exportSales(){ const rows=[['Invoice','Date','Customer','Salesman','Approval Status','Paid Units','Complimentary Units','Total Delivered','Invoice Total','Paid','Balance','Payment Status'],...accessibleSales().map(s=>[s.invoiceNo,asDate(s.saleDate)?.toISOString()||'',customerName(s.customerId),profileName(s.salesmanId),invoiceStatus(s),(s.items||[]).reduce((a,i)=>a+Number(i.paidQty||0),0),(s.items||[]).reduce((a,i)=>a+Number(i.freeQty||0),0),(s.items||[]).reduce((a,i)=>a+Number(i.issuedQty||0),0),s.total,s.paidAmount,Math.max(0,Number(s.total||0)-Number(s.paidAmount||0)),s.paymentStatus])]; const csv=rows.map(r=>r.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\n'); downloadBlob(csv,`nature-gen-distributaion-sales-${todayISO()}.csv`,'text/csv'); }
-const BACKUP_COLLECTIONS=['users','products','customers','customerIndex','sales','payments','expenses','stockMovements','ledgerEntries','auditTrail','cashBankAccounts','counters','settings','invoiceSubmissionLocks'];
+const BACKUP_COLLECTIONS=['users','products','customers','customerIndex','sales','payments','expenses','stockMovements','ledgerEntries','auditTrail','cashBankAccounts','counters','settings','invoiceSubmissionLocks','suppliers','purchaseReceipts','inventoryBatches','temperatureLogs','distributionReturns','recalls','complaints','controlledDrugRegister','selfInspections','capaActions','equipmentCalibrations'];
 function cleanBackupValue(v){return JSON.parse(JSON.stringify(v,(k,val)=>val?.toDate?val.toDate().toISOString():val));}
 async function buildBackupSnapshot(){if(!canManageBackups())throw new Error('Backup permission required.');const collections={};for(const name of BACKUP_COLLECTIONS){const snap=await getDocs(collection(db,name));collections[name]=snap.docs.map(d=>({id:d.id,data:d.data()}));}return{schemaVersion:2,company:COMPANY_NAME,exportedAt:new Date().toISOString(),exportedBy:state.user.uid,exportedByName:state.me?.fullName||state.user.email||'',collections};}
 function backupCounts(snapshot){const out={};Object.entries(snapshot.collections||{}).forEach(([k,v])=>out[k]=v.length);return out;}
@@ -814,7 +821,7 @@ async function performFreshOperationalReset(reason='Fresh operational start',aut
   const backupId=await createStoredBackup('pre_reset',true);
   setSync('Resetting operational data…');
   const removed={};
-  for(const name of ['payments','ledgerEntries','stockMovements','expenses','sales','invoiceSubmissionLocks','customerIndex','customers','products','cashBankAccounts','counters']){
+  for(const name of ['payments','ledgerEntries','stockMovements','expenses','sales','invoiceSubmissionLocks','customerIndex','customers','products','cashBankAccounts','counters','suppliers','purchaseReceipts','inventoryBatches','temperatureLogs','distributionReturns','recalls','complaints','controlledDrugRegister','selfInspections','capaActions','equipmentCalibrations']){
     removed[name]=await resetCollection(name);
   }
   removed.users=await resetCollection('users',u=>!['admin','marketing_director','erp_manager'].includes(u.role));
@@ -945,5 +952,11 @@ $('#forgotPasswordBtn').onclick=async()=>{if(!configured)return;const email=$('#
 $('#logoutBtn').onclick=async()=>{clearListeners();await signOut(auth);};
 $('#refreshBtn').onclick=()=>{ if(state.user&&state.me){ setSync('Refreshing live listeners…'); startLiveData(); } };
 $('#modalClose').onclick=closeModal; $('#modal').addEventListener('click',e=>{if(e.target===$('#modal'))closeModal();});
+
+initRegulatoryContext({
+  db,state,esc,fmt,money,date,dt,asDate,toast,showModal,closeModal,can,role,
+  profileName,customerName,productName,setSync,writeAudit,auditSet,todayISO,downloadBlob,
+  COMPANY_NAME
+});
 
 init();
