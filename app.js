@@ -11,7 +11,7 @@ import {
   initRegulatoryContext, attachRegulatoryListeners, renderRegulatory,
   applyFefoToApproval, restoreSaleBatches, batchText, expiryText,
   validateCustomerLicense
-} from './regulatory.js?v=20261109-regulatory-v5';
+} from './regulatory.js?v=20261109-documents-v1';
 
 const C = window.NATUREGEN_FIREBASE_CONFIG || {};
 const COMPANY_NAME = 'Nature Gen Distributaion';
@@ -49,7 +49,7 @@ const sortAscText = (rows, field) => [...rows].sort((a,b)=>String(a[field]||'').
 const state = {
   user:null, me:null, page:'dashboard',
   products:[], customers:[], users:[], sales:[], payments:[], expenses:[], movements:[], ledgerEntries:[], auditTrail:[], accounts:[], backups:[], backupPolicy:null, settings:null,
-  regSuppliers:[], regGrns:[], regBatches:[], regTemperatureLogs:[], regReturns:[], regRecalls:[], regComplaints:[], regControlled:[], regInspections:[], regCapa:[], regCalibrations:[], regProfile:null,
+  regSuppliers:[], regGrns:[], regBatches:[], regTemperatureLogs:[], regReturns:[], regRecalls:[], regComplaints:[], regControlled:[], regInspections:[], regCapa:[], regCalibrations:[], regDocuments:[], regProfile:null,
   unsubs:[], liveReady:false
 };
 
@@ -789,9 +789,9 @@ function renderReports(){
 }
 function salesmanSummaryTable(sales){ const reps=state.users.filter(p=>p.role==='salesman'); return `<div class="table-wrap"><table class="table"><thead><tr><th>Salesman</th><th>Route</th><th>Invoices</th><th>Sales</th><th>Collected</th><th>Outstanding</th><th>Free Units</th><th>Target</th><th>%</th></tr></thead><tbody>${reps.map(p=>{const ss=sales.filter(s=>s.salesmanId===p.id),v=ss.reduce((a,s)=>a+Number(s.total||0),0),rec=ss.reduce((a,s)=>a+Number(s.paidAmount||0),0),free=ss.reduce((x,s)=>x+(s.items||[]).reduce((a,i)=>a+Number(i.freeQty||0),0),0),pct=Number(p.monthlyTarget||0)>0?v/Number(p.monthlyTarget)*100:0;return `<tr><td>${esc(p.fullName)}</td><td>${esc(p.routeArea||'')}</td><td>${ss.length}</td><td>${money(v)}</td><td>${money(rec)}</td><td>${money(v-rec)}</td><td>${fmt(free)}</td><td>${money(p.monthlyTarget)}</td><td>${pct.toFixed(1)}%</td></tr>`}).join('')||'<tr><td colspan="9" class="empty">No salesmen.</td></tr>'}</tbody></table></div>`; }
 function exportSales(){ const rows=[['Invoice','Date','Customer','Salesman','Approval Status','Paid Units','Complimentary Units','Total Delivered','Invoice Total','Paid','Balance','Payment Status'],...accessibleSales().map(s=>[s.invoiceNo,asDate(s.saleDate)?.toISOString()||'',customerName(s.customerId),profileName(s.salesmanId),invoiceStatus(s),(s.items||[]).reduce((a,i)=>a+Number(i.paidQty||0),0),(s.items||[]).reduce((a,i)=>a+Number(i.freeQty||0),0),(s.items||[]).reduce((a,i)=>a+Number(i.issuedQty||0),0),s.total,s.paidAmount,Math.max(0,Number(s.total||0)-Number(s.paidAmount||0)),s.paymentStatus])]; const csv=rows.map(r=>r.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\n'); downloadBlob(csv,`nature-gen-distributaion-sales-${todayISO()}.csv`,'text/csv'); }
-const BACKUP_COLLECTIONS=['users','products','customers','customerIndex','sales','payments','expenses','stockMovements','ledgerEntries','auditTrail','cashBankAccounts','counters','settings','invoiceSubmissionLocks','suppliers','purchaseReceipts','inventoryBatches','temperatureLogs','distributionReturns','recalls','complaints','controlledDrugRegister','selfInspections','capaActions','equipmentCalibrations'];
+const BACKUP_COLLECTIONS=['users','products','customers','customerIndex','sales','payments','expenses','stockMovements','ledgerEntries','auditTrail','cashBankAccounts','counters','settings','invoiceSubmissionLocks','suppliers','purchaseReceipts','inventoryBatches','temperatureLogs','distributionReturns','recalls','complaints','controlledDrugRegister','selfInspections','capaActions','equipmentCalibrations','regulatoryDocuments'];
 function cleanBackupValue(v){return JSON.parse(JSON.stringify(v,(k,val)=>val?.toDate?val.toDate().toISOString():val));}
-async function buildBackupSnapshot(){if(!canManageBackups())throw new Error('Backup permission required.');const collections={};for(const name of BACKUP_COLLECTIONS){const snap=await getDocs(collection(db,name));collections[name]=snap.docs.map(d=>({id:d.id,data:d.data()}));}return{schemaVersion:3,company:COMPANY_NAME,exportedAt:new Date().toISOString(),exportedBy:state.user.uid,exportedByName:state.me?.fullName||state.user.email||'',collections};}
+async function buildBackupSnapshot(){if(!canManageBackups())throw new Error('Backup permission required.');const collections={};for(const name of BACKUP_COLLECTIONS){const snap=await getDocs(collection(db,name));collections[name]=snap.docs.map(d=>({id:d.id,data:d.data()}));}return{schemaVersion:4,company:COMPANY_NAME,exportedAt:new Date().toISOString(),exportedBy:state.user.uid,exportedByName:state.me?.fullName||state.user.email||'',collections};}
 function backupCounts(snapshot){const out={};Object.entries(snapshot.collections||{}).forEach(([k,v])=>out[k]=v.length);return out;}
 function nextBackupDate(frequency,base=new Date()){const d=new Date(base);if(frequency==='daily')d.setDate(d.getDate()+1);else if(frequency==='weekly')d.setDate(d.getDate()+7);else if(frequency==='monthly')d.setMonth(d.getMonth()+1);else if(frequency==='annually')d.setFullYear(d.getFullYear()+1);else d.setFullYear(d.getFullYear()+10);return d;}
 async function exportBackup(){if(!canManageBackups())return toast('Backup permission required.',true);try{const snapshot=await buildBackupSnapshot();downloadBlob(JSON.stringify(cleanBackupValue(snapshot),null,2),`nature-gen-distributaion-backup-${todayISO()}.json`,'application/json');await writeAudit('backup_downloaded_current','backup','current',{counts:backupCounts(snapshot)});toast('Current full backup downloaded.');}catch(err){console.error(err);toast(err.message||'Backup could not be downloaded.',true);}}
@@ -878,7 +878,7 @@ async function performFreshOperationalReset(reason='Fresh operational start',aut
   const backupId=await createStoredBackup('pre_reset',true);
   setSync('Resetting operational data…');
   const removed={};
-  for(const name of ['payments','ledgerEntries','stockMovements','expenses','sales','invoiceSubmissionLocks','customerIndex','customers','products','cashBankAccounts','counters','suppliers','purchaseReceipts','inventoryBatches','temperatureLogs','distributionReturns','recalls','complaints','controlledDrugRegister','selfInspections','capaActions','equipmentCalibrations']){
+  for(const name of ['payments','ledgerEntries','stockMovements','expenses','sales','invoiceSubmissionLocks','customerIndex','customers','products','cashBankAccounts','counters','suppliers','purchaseReceipts','inventoryBatches','temperatureLogs','distributionReturns','recalls','complaints','controlledDrugRegister','selfInspections','capaActions','equipmentCalibrations','regulatoryDocuments']){
     removed[name]=await resetCollection(name);
   }
   removed.users=await resetCollection('users',u=>!['admin','marketing_director','erp_manager'].includes(u.role));
