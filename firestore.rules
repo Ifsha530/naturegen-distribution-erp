@@ -16,6 +16,17 @@ service cloud.firestore {
     function isMarketingDirector() { return roleIs('marketing_director'); }
     function isERPManager() { return roleIs('erp_manager'); }
     function isManagement() { return isAdmin() || isMarketingDirector() || isERPManager(); }
+    function inspectionAccess() { return isManagement() || isInventory(); }
+    function customerLicenceValid(customerId) {
+      return customerAfter(customerId).data.get('licenseRequired', false) == false
+        || (
+          customerAfter(customerId).data.drugSaleLicenseNo is string
+          && customerAfter(customerId).data.drugSaleLicenseNo.size() > 0
+          && customerAfter(customerId).data.get('licenseVerified', false) == true
+          && customerAfter(customerId).data.licenseExpiryDate is timestamp
+          && customerAfter(customerId).data.licenseExpiryDate >= request.time
+        );
+    }
     function canApproveInvoices() { return isMarketingDirector(); }
     function canControlInvoices() { return isAdmin(); }
     function canManageExpenses() { return isAdmin() || isMarketingDirector() || isERPManager(); }
@@ -199,6 +210,7 @@ service cloud.firestore {
               && request.resource.data.reviewedBy == request.auth.uid
               && request.resource.data.dispatchEligible == true
               && request.resource.data.stockApplied == true
+              && customerLicenceValid(resource.data.customerId)
             )
             || (
               request.resource.data.status == 'rejected'
@@ -348,6 +360,81 @@ service cloud.firestore {
       allow create: if isAdmin() || isERPManager() || isInventory() || isMarketingDirector();
       allow update: if false;
       allow delete: if isAdmin();
+    }
+
+    match /suppliers/{supplierId} {
+      allow read: if inspectionAccess();
+      allow create, update: if isManagement();
+      allow delete: if false;
+    }
+
+    match /purchaseReceipts/{grnId} {
+      allow read: if inspectionAccess();
+      allow create: if inspectionAccess()
+        && request.resource.data.createdBy == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    match /inventoryBatches/{batchId} {
+      allow read: if inspectionAccess();
+      allow create: if inspectionAccess()
+        && request.resource.data.createdBy == request.auth.uid;
+      allow update: if inspectionAccess();
+      allow delete: if false;
+    }
+
+    match /temperatureLogs/{logId} {
+      allow read: if inspectionAccess();
+      allow create: if inspectionAccess()
+        && request.resource.data.recordedBy == request.auth.uid;
+      allow update: if isManagement();
+      allow delete: if false;
+    }
+
+    match /distributionReturns/{returnId} {
+      allow read: if inspectionAccess();
+      allow create: if inspectionAccess()
+        && request.resource.data.createdBy == request.auth.uid;
+      allow update: if isManagement();
+      allow delete: if false;
+    }
+
+    match /recalls/{recallId} {
+      allow read: if inspectionAccess();
+      allow create, update: if isManagement();
+      allow delete: if false;
+    }
+
+    match /complaints/{complaintId} {
+      allow read: if inspectionAccess();
+      allow create: if inspectionAccess();
+      allow update: if isManagement();
+      allow delete: if false;
+    }
+
+    match /controlledDrugRegister/{entryId} {
+      allow read: if inspectionAccess();
+      allow create: if inspectionAccess()
+        && request.resource.data.enteredBy == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    match /selfInspections/{inspectionId} {
+      allow read: if inspectionAccess();
+      allow create, update: if isManagement();
+      allow delete: if false;
+    }
+
+    match /capaActions/{capaId} {
+      allow read: if inspectionAccess();
+      allow create, update: if isManagement();
+      allow delete: if false;
+    }
+
+    match /equipmentCalibrations/{calibrationId} {
+      allow read: if inspectionAccess();
+      allow create, update: if isManagement();
+      allow delete: if false;
     }
 
     match /expenses/{expenseId} {
