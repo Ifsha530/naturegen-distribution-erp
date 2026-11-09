@@ -403,11 +403,11 @@ async function cancelInvoice(id,softDelete=false){
         const currentPaymentSnaps=[]; if(approved) for(const ref of payRefs) currentPaymentSnaps.push(await tx.get(ref));
         const now=Timestamp.now(); let reversedPayments=0;
         if(approved){
-          await restoreSaleBatches(tx,{...s,id},now,reason);
+          const restoredSaleableByProduct=await restoreSaleBatches(tx,{...s,id},now,reason);
           productSnaps.forEach((snap,idx)=>{
-            if(!snap.exists())return; const p=snap.data(),item=s.items[idx],add=Number(item.issuedQty||0),bal=Number(p.stockQty||0)+add;
+            if(!snap.exists())return; const p=snap.data(),item=s.items[idx],hasBatch=(item.batchAllocations||[]).length>0,add=hasBatch?Number(restoredSaleableByProduct[item.productId]||0):Number(item.issuedQty||0),bal=Number(p.stockQty||0)+add;
             tx.update(productRefs[idx],{stockQty:bal,updatedAt:now});
-            const mref=doc(collection(db,'stockMovements'));tx.set(mref,{productId:item.productId,productName:item.name,batchAllocations:item.batchAllocations||[],movementType:'invoice_cancel_reversal',qtyChange:add,paidQty:Number(item.paidQty||0),freeQty:Number(item.freeQty||0),balanceAfter:bal,refType:'sale',refId:id,notes:`Cancellation ${s.invoiceNo}: ${reason}`,enteredBy:state.user.uid,createdAt:now});
+            const mref=doc(collection(db,'stockMovements'));tx.set(mref,{productId:item.productId,productName:item.name,batchAllocations:item.batchAllocations||[],movementType:'invoice_cancel_reversal',qtyChange:add,paidQty:Number(item.paidQty||0),freeQty:Number(item.freeQty||0),balanceAfter:bal,refType:'sale',refId:id,notes:`Cancellation ${s.invoiceNo}: ${reason}${hasBatch&&add<Number(item.issuedQty||0)?' (non-saleable/expired batch quantity not returned to saleable stock)':''}`,enteredBy:state.user.uid,createdAt:now});
           });
           currentPaymentSnaps.forEach((snap,idx)=>{
             if(!snap.exists())return;
