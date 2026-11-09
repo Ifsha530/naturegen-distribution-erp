@@ -590,8 +590,9 @@ export function validateCustomerLicense(customer,onDateValue){
   if(!requiresCustomerLicense(customer))return {ok:true,message:''};
   if(!customer?.drugSaleLicenseNo)return {ok:false,message:'Customer Drug Sale Licence number is missing.'};
   if(customer?.licenseVerified!==true)return {ok:false,message:'Customer Drug Sale Licence is not marked verified.'};
+  if(!customer?.licenseExpiryDate)return {ok:false,message:'Customer Drug Sale Licence expiry date is missing.'};
   const at=asDate(onDateValue)||new Date();
-  if(customer?.licenseExpiryDate&&expired(customer.licenseExpiryDate,at))return {ok:false,message:'Customer Drug Sale Licence is expired for the invoice date.'};
+  if(expired(customer.licenseExpiryDate,at))return {ok:false,message:'Customer Drug Sale Licence is expired for the invoice date.'};
   return {ok:true,message:''};
 }
 
