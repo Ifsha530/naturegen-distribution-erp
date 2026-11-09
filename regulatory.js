@@ -466,15 +466,15 @@ function bindCurrentTab(){
   if(currentTab==='profile'&&$('#regProfileForm'))$('#regProfileForm').onsubmit=saveProfile;
   if(currentTab==='suppliers'){
     if($('#addSupplierBtn'))$('#addSupplierBtn').onclick=function(){openSupplierForm();};
-    $('[data-edit-supplier]').forEach(b=>b.onclick=function(){openSupplierForm(b.dataset.editSupplier);});
-    $('[data-supplier-copy]').forEach(b=>b.onclick=function(){const x=supplierById(b.dataset.supplierCopy);if(x?.licenseAttachment?.dataUrl)window.open(x.licenseAttachment.dataUrl,'_blank');});
+    $$('[data-edit-supplier]').forEach(b=>b.onclick=function(){openSupplierForm(b.dataset.editSupplier);});
+    $$('[data-supplier-copy]').forEach(b=>b.onclick=function(){const x=supplierById(b.dataset.supplierCopy);if(x?.licenseAttachment?.dataUrl)window.open(x.licenseAttachment.dataUrl,'_blank');});
     if($('#addGrnBtn'))$('#addGrnBtn').onclick=openGrnForm;
   }
   if(currentTab==='batches')$$('[data-batch-status]').forEach(b=>b.onclick=function(){openBatchStatus(b.dataset.batchStatus);});
   if(currentTab==='temperature'){
     if($('#addTempBtn'))$('#addTempBtn').onclick=openTempForm;
     if($('#addCalibrationBtn'))$('#addCalibrationBtn').onclick=openCalibrationForm;
-    $('[data-close-temp]').forEach(b=>b.onclick=function(){openTempClosure(b.dataset.closeTemp);});
+    $$('[data-close-temp]').forEach(b=>b.onclick=function(){openTempClosure(b.dataset.closeTemp);});
   }
   if(currentTab==='returns'){
     if($('#addReturnBtn'))$('#addReturnBtn').onclick=openReturnForm;
@@ -497,8 +497,8 @@ function bindCurrentTab(){
   if(currentTab==='documents'){
     if($('#newWarrantyBtn'))$('#newWarrantyBtn').onclick=openWarrantyForm;
     if($('#newAuthorityBtn'))$('#newAuthorityBtn').onclick=openAuthorityForm;
-    $('[data-print-regdoc]').forEach(b=>b.onclick=function(){printRegulatoryDocumentById(b.dataset.printRegdoc);});
-    $('[data-doc-copy]').forEach(b=>b.onclick=function(){const x=(state().regDocuments||[]).find(z=>z.id===b.dataset.docCopy);if(x?.signedAttachment?.dataUrl)window.open(x.signedAttachment.dataUrl,'_blank');});
+    $$('[data-print-regdoc]').forEach(b=>b.onclick=function(){printRegulatoryDocumentById(b.dataset.printRegdoc);});
+    $$('[data-doc-copy]').forEach(b=>b.onclick=function(){const x=(state().regDocuments||[]).find(z=>z.id===b.dataset.docCopy);if(x?.signedAttachment?.dataUrl)window.open(x.signedAttachment.dataUrl,'_blank');});
   }
   if(currentTab==='inspector'&&$('#printInspectorPackBtn'))$('#printInspectorPackBtn').onclick=printInspectorPack;
   if(currentTab==='inspector'&&$('#printSystemPackBtn'))$('#printSystemPackBtn').onclick=printSystemControlPack;
