@@ -622,9 +622,32 @@ function renderInventory(){
   $('[data-product-edit]').forEach(b=>b.onclick=()=>openProductForm(b.dataset.productEdit));
 }
 function openStockForm(){
-  showModal('Stock Movement',`<form id="stockForm" class="form-grid"><label>Product<select id="stProduct" required><option value="">Select</option>${activeProducts().map(p=>`<option value="${p.id}">${esc(p.name)} — Stock ${fmt(p.stockQty)}</option>`).join('')}</select></label><label>Type<select id="stType"><option value="production_received">Production Received</option><option value="purchase_received">Purchase Received</option><option value="sales_return">Sales Return</option><option value="damage">Damage / Breakage</option><option value="adjustment_plus">Adjustment +</option><option value="adjustment_minus">Adjustment -</option></select></label><label>Quantity<input id="stQty" type="number" min="1" step="1" required></label><label class="full">Notes<textarea id="stNotes"></textarea></label><div class="full"><button class="btn primary">Save Movement</button></div></form>`);
-  $('#stockForm').onsubmit=async e=>{e.preventDefault();const productId=$('#stProduct').value,type=$('#stType').value,qty=Math.floor(Number($('#stQty').value||0));if(!productId||qty<=0)return;const negative=['damage','adjustment_minus'].includes(type),delta=negative?-qty:qty,pRef=doc(db,'products',productId),mRef=doc(collection(db,'stockMovements'));try{await runTransaction(db,async tx=>{const ps=await tx.get(pRef);if(!ps.exists())throw new Error('Product not found.');const p=ps.data(),old=Number(p.stockQty||0),bal=old+delta;if(bal<0)throw new Error(`Only ${old} units available.`);tx.update(pRef,{stockQty:bal,updatedAt:Timestamp.now()});tx.set(mRef,{productId,productName:p.name,movementType:type,qtyChange:delta,balanceAfter:bal,refType:'manual',refId:'',notes:$('#stNotes').value.trim(),enteredBy:state.user.uid,createdAt:Timestamp.now()});});closeModal();toast('Stock updated.');}catch(err){toast(err.message,true);}};
+  const saleableBatches=state.regBatches.filter(b=>b.status==='saleable'&&Number(b.availableQty||0)>0&&(!b.expiryDate||asDate(b.expiryDate)>=new Date(new Date().toDateString())));
+  if(!saleableBatches.length) return toast('No saleable batch stock. Receive stock through Drug Inspector / GDP → Suppliers + GRN.',true);
+  showModal('Batch Stock Adjustment',`<form id="stockForm" class="form-grid"><label>Batch<select id="stBatch" required><option value="">Select</option>${saleableBatches.map(b=>`<option value="${b.id}">${esc(productName(b.productId))} — Batch ${esc(b.batchNo||'')} — Exp ${date(b.expiryDate)} — Qty ${fmt(b.availableQty)}</option>`).join('')}</select></label><label>Type<select id="stType"><option value="damage">Damage / Breakage (-)</option><option value="adjustment_minus">Physical Adjustment (-)</option><option value="adjustment_plus">Physical Adjustment (+)</option></select></label><label>Quantity<input id="stQty" type="number" min="1" step="1" required></label><label class="full">Mandatory Reason<textarea id="stNotes" required></textarea></label><div class="full help">Purchase/production receipts must be posted through GRN. Customer returns must use the Returns / Quarantine workflow.</div><div class="full"><button class="btn primary">Save Batch Adjustment</button></div></form>`);
+  $('#stockForm').onsubmit=async e=>{
+    e.preventDefault();
+    const batchId=$('#stBatch').value,type=$('#stType').value,qty=Math.floor(Number($('#stQty').value||0)),notes=$('#stNotes').value.trim();
+    const b=state.regBatches.find(x=>x.id===batchId);if(!b||qty<=0||!notes)return;
+    const negative=['damage','adjustment_minus'].includes(type),delta=negative?-qty:qty,pRef=doc(db,'products',b.productId),bRef=doc(db,'inventoryBatches',batchId),mRef=doc(collection(db,'stockMovements'));
+    try{
+      await runTransaction(db,async tx=>{
+        const [ps,bs]=await Promise.all([tx.get(pRef),tx.get(bRef)]);
+        if(!ps.exists()||!bs.exists())throw new Error('Product/batch not found.');
+        const p=ps.data(),live=bs.data();if(live.status!=='saleable')throw new Error('Only saleable batch stock can be manually adjusted.');
+        const oldProduct=Number(p.stockQty||0),oldBatch=Number(live.availableQty||0),newProduct=oldProduct+delta,newBatch=oldBatch+delta;
+        if(newProduct<0||newBatch<0)throw new Error(`Only ${oldBatch} units available in this batch.`);
+        const now=Timestamp.now();
+        tx.update(pRef,{stockQty:newProduct,updatedAt:now});
+        tx.update(bRef,{availableQty:newBatch,updatedAt:now});
+        tx.set(mRef,{productId:b.productId,productName:p.name,batchId,batchNo:live.batchNo,expiryDate:live.expiryDate,movementType:type,qtyChange:delta,balanceAfter:newProduct,batchBalanceAfter:newBatch,refType:'manual_batch_adjustment',refId:batchId,notes,enteredBy:state.user.uid,createdAt:now});
+        auditSet(tx,'batch_stock_adjusted','batch',batchId,{productId:b.productId,batchNo:live.batchNo,type,qtyChange:delta,reason:notes});
+      });
+      closeModal();toast('Batch and product stock updated together.');
+    }catch(err){toast(err.message,true);}
+  };
 }
+
 function openAddProductForm(){
   if(!canManagementCreate()) return toast('Management permission required to add products.',true);
   showModal('Add Product',`<form id="addProductForm" class="form-grid">
