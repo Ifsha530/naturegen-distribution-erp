@@ -623,10 +623,22 @@ function openAddProductForm(){
     <label>Product Name<input id="npName" required></label>
     <label>Category<select id="npCategory"><option value="Pharmaceutical">Pharmaceutical</option><option value="Herbal">Herbal</option><option value="Nutraceutical">Nutraceutical</option><option value="Cosmetic">Cosmetic</option><option value="Other">Other</option></select></label>
     <label>Pack Size<input id="npPack" placeholder="e.g. 120 ml / 30 Tablets"></label>
+    <label>DRAP Registration No.<input id="npRegNo" placeholder="Registration / enlistment no."></label>
+    <label>Manufacturer<input id="npManufacturer" required></label>
+    <label>Dosage Form<input id="npDosageForm" placeholder="Syrup / Tablet / Capsule"></label>
+    <label>Strength<input id="npStrength" placeholder="e.g. 200 mg/5 mL"></label>
+    <label>Storage Condition<input id="npStorage" value="Store below 30°C, protect from light"></label>
+    <label>Product Class<select id="npProductClass"><option value="Prescription">Prescription</option><option value="OTC">OTC</option><option value="Nutraceutical">Nutraceutical</option><option value="Herbal">Herbal</option><option value="Cosmetic">Cosmetic</option></select></label>
+    <label>Controlled Drug<select id="npControlled"><option value="false">No</option><option value="true">Yes</option></select></label>
+    <label>Schedule / Control Class<input id="npSchedule" placeholder="If applicable"></label>
     <label>MRP<input id="npMrp" type="number" min="0" step="0.01" value="0"></label>
     <label>Sale Price<input id="npSale" type="number" min="0" step="0.01" value="0"></label>
     <label>Purchase / Cost Price<input id="npCost" type="number" min="0" step="0.01" value="0"></label>
     <label>Opening Stock<input id="npOpening" type="number" min="0" step="1" value="0"></label>
+    <label>Opening Batch No.<input id="npOpeningBatch" placeholder="Required if opening stock > 0"></label>
+    <label>Opening Mfg Date<input id="npOpeningMfg" type="date"></label>
+    <label>Opening Expiry Date<input id="npOpeningExpiry" type="date"></label>
+    <label>Opening Supplier / Source<input id="npOpeningSupplier" placeholder="Existing stock source"></label>
     <label>Low Stock Alert<input id="npLow" type="number" min="0" step="1" value="0"></label>
     <label>Scheme Buy Qty<input id="npBuy" type="number" min="0" step="1" value="0"></label>
     <label>Scheme Free Qty<input id="npFree" type="number" min="0" step="1" value="0"></label>
@@ -642,12 +654,22 @@ function openAddProductForm(){
     const duplicate=state.products.find(p=>normalizeKey(p.sku)===normalizeKey(sku)||normalizeKey(p.name)===normalizeKey(name));
     if(duplicate)return toast(`Product already exists: ${duplicate.sku||''} ${duplicate.name||''}`,true);
     const openingStock=Math.max(0,Math.floor(Number($('#npOpening').value||0)));
-    const productRef=doc(collection(db,'products')), movementRef=doc(collection(db,'stockMovements'));
+    const openingBatchNo=$('#npOpeningBatch').value.trim(), openingExpiry=$('#npOpeningExpiry').value;
+    if(openingStock>0 && (!openingBatchNo||!openingExpiry)) return toast('Opening stock requires Batch No. and Expiry Date for regulatory traceability.',true);
+    const productRef=doc(collection(db,'products')), movementRef=doc(collection(db,'stockMovements')), batchRef=openingStock>0?doc(collection(db,'inventoryBatches')):null;
     const now=Timestamp.now();
     const productData={
       sku,name,
       category:$('#npCategory').value,
       packSize:$('#npPack').value.trim(),
+      registrationNo:$('#npRegNo').value.trim(),
+      manufacturer:$('#npManufacturer').value.trim(),
+      dosageForm:$('#npDosageForm').value.trim(),
+      strength:$('#npStrength').value.trim(),
+      storageCondition:$('#npStorage').value.trim(),
+      productClass:$('#npProductClass').value,
+      controlledDrug:$('#npControlled').value==='true',
+      scheduleClass:$('#npSchedule').value.trim(),
       mrp:Math.max(0,Number($('#npMrp').value||0)),
       salePrice:Math.max(0,Number($('#npSale').value||0)),
       costPrice:Math.max(0,Number($('#npCost').value||0)),
@@ -663,7 +685,10 @@ function openAddProductForm(){
       await runTransaction(db,async tx=>{
         tx.set(productRef,productData);
         if(openingStock>0){
-          tx.set(movementRef,{productId:productRef.id,productName:name,movementType:'opening',qtyChange:openingStock,balanceAfter:openingStock,refType:'product_creation',refId:productRef.id,notes:$('#npNotes').value.trim()||'Opening stock at product creation',enteredBy:state.user.uid,createdAt:now});
+          const expiryDate=tsFromInput(openingExpiry),mfgDate=$('#npOpeningMfg').value?tsFromInput($('#npOpeningMfg').value):null;
+          tx.set(batchRef,{productId:productRef.id,productName:name,batchNo:openingBatchNo,mfgDate,expiryDate,supplierId:'',supplierName:$('#npOpeningSupplier').value.trim()||'Opening Stock',grnId:'',receivedQty:openingStock,availableQty:openingStock,status:'saleable',storageLocation:'Main Warehouse',unitCost:productData.costPrice,receivedAt:now,createdBy:state.user.uid,createdAt:now,updatedAt:now,openingStock:true});
+          tx.set(movementRef,{productId:productRef.id,productName:name,batchId:batchRef.id,batchNo:openingBatchNo,expiryDate,movementType:'opening',qtyChange:openingStock,balanceAfter:openingStock,refType:'product_creation',refId:productRef.id,notes:$('#npNotes').value.trim()||'Opening stock at product creation',enteredBy:state.user.uid,createdAt:now});
+          if(productData.controlledDrug===true) tx.set(doc(collection(db,'controlledDrugRegister')),{productId:productRef.id,batchId:batchRef.id,batchNo:openingBatchNo,transactionType:'opening_stock',qtyIn:openingStock,qtyOut:0,reference:'OPENING',partyName:$('#npOpeningSupplier').value.trim()||'Opening Stock',transactionDate:now,enteredBy:state.user.uid,enteredByName:state.me?.fullName||'',createdAt:now,automatic:true});
         }
         auditSet(tx,'product_created','product',productRef.id,{sku,name,category:productData.category,packSize:productData.packSize,openingStock,mrp:productData.mrp,salePrice:productData.salePrice,costPrice:productData.costPrice});
       });
@@ -674,8 +699,8 @@ function openAddProductForm(){
 
 function openProductForm(id){
   const p=state.products.find(x=>x.id===id); if(!p)return;
-  showModal('Edit Product',`<form id="productForm" class="form-grid"><label>SKU<input id="pSku" value="${esc(p.sku||'')}"></label><label>Name<input id="pName" required value="${esc(p.name)}"></label><label>Category<input id="pCategory" value="${esc(p.category||'')}"></label><label>Pack Size<input id="pPack" value="${esc(p.packSize||'')}"></label><label>MRP<input id="pMrp" type="number" min="0" step="0.01" value="${p.mrp||0}"></label><label>Sale Price<input id="pSale" type="number" min="0" step="0.01" value="${p.salePrice||0}"></label><label>Cost Price<input id="pCost" type="number" min="0" step="0.01" value="${p.costPrice||0}"></label><label>Low Stock Alert<input id="pLow" type="number" min="0" step="1" value="${p.lowStockThreshold||0}"></label><label>Scheme Buy<input id="pBuy" type="number" min="0" step="1" value="${p.schemeBuy||0}"></label><label>Scheme Free<input id="pFree" type="number" min="0" step="1" value="${p.schemeFree||0}"></label><label>Active<select id="pActive"><option value="true" ${p.active!==false?'selected':''}>Yes</option><option value="false" ${p.active===false?'selected':''}>No</option></select></label><div class="full"><button class="btn primary">Save Product</button></div></form>`);
-  $('#productForm').onsubmit=async e=>{e.preventDefault();try{const sku=$('#pSku').value.trim(),name=$('#pName').value.trim();const duplicate=state.products.find(x=>x.id!==id&&(normalizeKey(x.sku)===normalizeKey(sku)||normalizeKey(x.name)===normalizeKey(name)));if(duplicate)return toast(`Product already exists: ${duplicate.sku||''} ${duplicate.name||''}`,true);await updateDoc(doc(db,'products',id),{sku,name,category:$('#pCategory').value.trim(),packSize:$('#pPack').value.trim(),mrp:Number($('#pMrp').value||0),salePrice:Number($('#pSale').value||0),costPrice:Number($('#pCost').value||0),lowStockThreshold:Number($('#pLow').value||0),schemeBuy:Number($('#pBuy').value||0),schemeFree:Number($('#pFree').value||0),active:$('#pActive').value==='true',updatedAt:serverTimestamp()});closeModal();toast('Product updated.');}catch(err){toast(err.message,true);}};
+  showModal('Edit Product',`<form id="productForm" class="form-grid"><label>SKU<input id="pSku" value="${esc(p.sku||'')}"></label><label>Name<input id="pName" required value="${esc(p.name)}"></label><label>Category<input id="pCategory" value="${esc(p.category||'')}"></label><label>Pack Size<input id="pPack" value="${esc(p.packSize||'')}"></label><label>DRAP Registration No.<input id="pRegNo" value="${esc(p.registrationNo||'')}"></label><label>Manufacturer<input id="pManufacturer" value="${esc(p.manufacturer||'')}"></label><label>Dosage Form<input id="pDosageForm" value="${esc(p.dosageForm||'')}"></label><label>Strength<input id="pStrength" value="${esc(p.strength||'')}"></label><label>Storage Condition<input id="pStorage" value="${esc(p.storageCondition||'')}"></label><label>Product Class<input id="pProductClass" value="${esc(p.productClass||'')}"></label><label>Controlled Drug<select id="pControlled"><option value="false" ${p.controlledDrug===true?'':'selected'}>No</option><option value="true" ${p.controlledDrug===true?'selected':''}>Yes</option></select></label><label>Schedule / Control Class<input id="pSchedule" value="${esc(p.scheduleClass||'')}"></label><label>MRP<input id="pMrp" type="number" min="0" step="0.01" value="${p.mrp||0}"></label><label>Sale Price<input id="pSale" type="number" min="0" step="0.01" value="${p.salePrice||0}"></label><label>Cost Price<input id="pCost" type="number" min="0" step="0.01" value="${p.costPrice||0}"></label><label>Low Stock Alert<input id="pLow" type="number" min="0" step="1" value="${p.lowStockThreshold||0}"></label><label>Scheme Buy<input id="pBuy" type="number" min="0" step="1" value="${p.schemeBuy||0}"></label><label>Scheme Free<input id="pFree" type="number" min="0" step="1" value="${p.schemeFree||0}"></label><label>Active<select id="pActive"><option value="true" ${p.active!==false?'selected':''}>Yes</option><option value="false" ${p.active===false?'selected':''}>No</option></select></label><div class="full"><button class="btn primary">Save Product</button></div></form>`);
+  $('#productForm').onsubmit=async e=>{e.preventDefault();try{const sku=$('#pSku').value.trim(),name=$('#pName').value.trim();const duplicate=state.products.find(x=>x.id!==id&&(normalizeKey(x.sku)===normalizeKey(sku)||normalizeKey(x.name)===normalizeKey(name)));if(duplicate)return toast(`Product already exists: ${duplicate.sku||''} ${duplicate.name||''}`,true);await updateDoc(doc(db,'products',id),{sku,name,category:$('#pCategory').value.trim(),packSize:$('#pPack').value.trim(),registrationNo:$('#pRegNo').value.trim(),manufacturer:$('#pManufacturer').value.trim(),dosageForm:$('#pDosageForm').value.trim(),strength:$('#pStrength').value.trim(),storageCondition:$('#pStorage').value.trim(),productClass:$('#pProductClass').value.trim(),controlledDrug:$('#pControlled').value==='true',scheduleClass:$('#pSchedule').value.trim(),mrp:Number($('#pMrp').value||0),salePrice:Number($('#pSale').value||0),costPrice:Number($('#pCost').value||0),lowStockThreshold:Number($('#pLow').value||0),schemeBuy:Number($('#pBuy').value||0),schemeFree:Number($('#pFree').value||0),active:$('#pActive').value==='true',updatedAt:serverTimestamp()});closeModal();toast('Product updated.');}catch(err){toast(err.message,true);}};
 }
 
 function renderRecovery(){
