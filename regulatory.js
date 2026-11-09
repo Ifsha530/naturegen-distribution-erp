@@ -5,6 +5,7 @@ import {
 
 let ctx=null;
 let currentTab='overview';
+const expiryProcessing=new Set();
 
 const COLLECTIONS=[
   ['suppliers','regSuppliers'],
@@ -46,6 +47,7 @@ function todayISO(){ return C().todayISO(); }
 function tsInput(v){ return v?Timestamp.fromDate(new Date(v+'T12:00:00')):null; }
 function iso(v){ const x=asDate(v); return x?x.toISOString().slice(0,10):''; }
 function normalize(v){ return String(v||'').trim().toLowerCase(); }
+function readAttachment(file){ if(!file)return Promise.resolve(null); if(file.size>450000)return Promise.reject(new Error('Attachment must be 450 KB or smaller.')); return new Promise(function(resolve,reject){const r=new FileReader();r.onload=function(){resolve({name:file.name,type:file.type||'application/octet-stream',dataUrl:r.result});};r.onerror=function(){reject(r.error||new Error('Attachment could not be read.'));};r.readAsDataURL(file);}); }
 function expired(v,at=new Date()){ const x=asDate(v); if(!x)return false; const end=new Date(x);end.setHours(23,59,59,999);return end<at; }
 function daysUntil(v){ const x=asDate(v);if(!x)return null;return Math.ceil((x.getTime()-Date.now())/86400000); }
 function activeManagement(){ return can('admin','marketing_director','erp_manager'); }
@@ -64,6 +66,7 @@ export function attachRegulatoryListeners(){
     const col=pair[0],key=pair[1];
     const unsub=onSnapshot(collection(db(),col),function(snap){
       s[key]=snap.docs.map(x=>Object.assign({id:x.id},x.data()));
+      if(key==='regBatches')setTimeout(autoExpireBatches,0);
       if(['regGrns','regTemperatureLogs','regReturns','regRecalls','regComplaints','regControlled','regInspections','regCapa','regCalibrations'].includes(key)){
         const field=key==='regTemperatureLogs'?'recordedAt':key==='regControlled'?'transactionDate':key==='regCalibrations'?'nextDueDate':'createdAt';
         s[key]=sortDateDesc(s[key],field);
@@ -77,6 +80,27 @@ export function attachRegulatoryListeners(){
     if(s.page==='regulatory')renderRegulatory();
   });
   s.unsubs.push(us);
+}
+
+async function autoExpireBatches(){
+  if(!inspectionAccess())return;
+  const candidates=state().regBatches.filter(function(b){return b.status==='saleable'&&Number(b.availableQty||0)>0&&expired(b.expiryDate)&&!expiryProcessing.has(b.id);});
+  for(const b of candidates){
+    expiryProcessing.add(b.id);
+    try{
+      const br=doc(db(),'inventoryBatches',b.id),pr=doc(db(),'products',b.productId);
+      await runTransaction(db(),async function(tx){
+        const bs=await tx.get(br),ps=await tx.get(pr);if(!bs.exists()||!ps.exists())return;
+        const live=bs.data();if(live.status!=='saleable'||!expired(live.expiryDate)||Number(live.availableQty||0)<=0)return;
+        const qty=Number(live.availableQty||0),old=Number(ps.data().stockQty||0),bal=Math.max(0,old-qty),now=Timestamp.now();
+        tx.update(br,{status:'expired',statusReason:'Automatic expiry block',statusChangedAt:now,statusChangedBy:state().user.uid,updatedAt:now});
+        tx.update(pr,{stockQty:bal,updatedAt:now});
+        tx.set(doc(collection(db(),'stockMovements')),{productId:b.productId,productName:ps.data().name,batchId:b.id,batchNo:live.batchNo,expiryDate:live.expiryDate,movementType:'expiry_block',qtyChange:-(old-bal),balanceAfter:bal,refType:'batch_expiry',refId:b.id,notes:'Batch automatically blocked on expiry',enteredBy:state().user.uid,createdAt:now});
+        C().auditSet(tx,'batch_auto_expired','batch',b.id,{productId:b.productId,batchNo:live.batchNo,availableQty:qty,stockDeducted:old-bal,stockMismatch:old<qty});
+      });
+    }catch(err){console.error('Auto expiry '+b.id,err);}
+    finally{expiryProcessing.delete(b.id);}
+  }
 }
 
 function regulatoryTabs(){
@@ -249,11 +273,11 @@ function renderComplaints(){
 }
 
 function renderControlled(){
-  const rows=state().regControlled.slice(0,150);
+  const chronological=state().regControlled.slice().sort((a,b)=>(asDate(a.transactionDate||a.createdAt)?.getTime()||0)-(asDate(b.transactionDate||b.createdAt)?.getTime()||0)),balances={},withBalance=chronological.map(function(x){const k=(x.productId||'')+'|'+(x.batchNo||'');balances[k]=(balances[k]||0)+Number(x.qtyIn||0)-Number(x.qtyOut||0);return Object.assign({},x,{runningBalance:balances[k]});}),rows=withBalance.reverse().slice(0,150);
   return '<div class="section-head"><div><h3>Controlled Drug Transaction Register</h3><div class="muted">Controlled-product GRNs and approved sales are logged automatically; manual adjustments can also be recorded.</div></div>'+(activeManagement()?'<button id="addControlledBtn" class="btn primary">+ Manual Entry</button>':'')+'</div>'+
-    '<div class="table-wrap"><table class="table"><thead><tr><th>Date</th><th>Product</th><th>Batch</th><th>Type</th><th>In</th><th>Out</th><th>Reference</th><th>Party</th><th>By</th></tr></thead><tbody>'+
-    rows.map(x=>'<tr><td>'+e(dt(x.transactionDate||x.createdAt))+'</td><td>'+e(productName(x.productId))+'</td><td>'+e(x.batchNo||'')+'</td><td>'+e(x.transactionType||'')+'</td><td>'+f(x.qtyIn||0)+'</td><td>'+f(x.qtyOut||0)+'</td><td>'+e(x.reference||'')+'</td><td>'+e(x.partyName||'')+'</td><td>'+e(x.enteredByName||profileName(x.enteredBy))+'</td></tr>').join('')+
-    (rows.length?'':'<tr><td colspan="9" class="empty">No controlled-drug transactions.</td></tr>')+'</tbody></table></div>';
+    '<div class="table-wrap"><table class="table"><thead><tr><th>Date</th><th>Product</th><th>Batch</th><th>Type</th><th>In</th><th>Out</th><th>Reference</th><th>Party</th><th>Balance</th><th>By</th></tr></thead><tbody>'+
+    rows.map(x=>'<tr><td>'+e(dt(x.transactionDate||x.createdAt))+'</td><td>'+e(productName(x.productId))+'</td><td>'+e(x.batchNo||'')+'</td><td>'+e(x.transactionType||'')+'</td><td>'+f(x.qtyIn||0)+'</td><td>'+f(x.qtyOut||0)+'</td><td>'+e(x.reference||'')+'</td><td>'+e(x.partyName||'')+'</td><td><b>'+f(x.runningBalance||0)+'</b></td><td>'+e(x.enteredByName||profileName(x.enteredBy))+'</td></tr>').join('')+
+    (rows.length?'':'<tr><td colspan="10" class="empty">No controlled-drug transactions.</td></tr>')+'</tbody></table></div>';
 }
 
 function renderCapa(){
@@ -273,7 +297,8 @@ function renderInspectorPack(){
     '<div class="grid">'+
     '<div class="card"><h3>Licence / Responsible Person</h3><p><b>Licence:</b> '+e(state().regProfile?.distributionLicenseNo||'Not entered')+'</p><p><b>Expiry:</b> '+e(d(state().regProfile?.licenseExpiryDate))+'</p><p><b>Responsible Person:</b> '+e(state().regProfile?.responsiblePersonName||'Not entered')+'</p></div>'+
     '<div class="card"><h3>Traceability</h3><p>Products: '+f(state().products.length)+'</p><p>Batches: '+f(state().regBatches.length)+'</p><p>Purchase/GRNs: '+f(state().regGrns.length)+'</p><p>Approved Sales: '+f(state().sales.filter(x=>(x.status||'approved')==='approved').length)+'</p></div>'+
-    '<div class="card"><h3>Quality Systems</h3><p>Temperature Logs: '+f(state().regTemperatureLogs.length)+'</p><p>Returns: '+f(state().regReturns.length)+'</p><p>Recalls: '+f(state().regRecalls.length)+'</p><p>Complaints: '+f(state().regComplaints.length)+'</p></div>'+
+    '<div class="card"><h3>Quality Systems</h3><p>Temperature Logs: '+f(state().regTemperatureLogs.length)+'</p><p>Returns: '+f(state().regReturns.length)+'</p><p>Recalls: '+f(state().regRecalls.length)+'</p><p>Complaints: '+f(state().regComplaints.length)+'</p></div>'+ 
+    '<div class="card"><h3>Computerized System Documents</h3><p><b>System description:</b> Multi-user cloud distribution ERP with role-based access, batch FEFO, approval, audit and backup controls.</p><p><b>Access matrix:</b> Admin / Marketing Director / ERP Manager / Inventory / Salesman / Recovery roles.</p><p><b>Change control:</b> GitHub deployment history + ERP Audit Trail.</p><p><b>SOP refs:</b> '+e(state().regProfile?.sopReferences||'Not entered')+'</p></div>'+
     '</div>'+
     '<div class="section-head"><h3>Purchase Register</h3></div>'+grnTable()+
     '<div class="section-head"><h3>Sales Register — Batch Traceability</h3></div>'+salesRegisterTable()+
@@ -353,13 +378,15 @@ function openSupplierForm(id){
     '<label>Licence Type<input id="sLicType" value="'+e(x?.licenseType||'Drug Sale / Manufacturing Licence')+'"></label>'+
     '<label>Licence No.<input id="sLicNo" required value="'+e(x?.licenseNo||'')+'"></label>'+
     '<label>Licence Expiry<input id="sLicExpiry" type="date" required value="'+e(iso(x?.licenseExpiryDate))+'"></label>'+
-    '<label>Manufacturer Authorization Ref<input id="sAuth" value="'+e(x?.manufacturerAuthorization||'')+'"></label>'+
+    '<label>Manufacturer Authorization Ref<input id="sAuth" value="'+e(x?.manufacturerAuthorization||'')+'"></label>'+ 
+    '<label>Licence Copy (optional, ≤450 KB)<input id="sFile" type="file" accept=".pdf,image/*"></label>'+
     '<label>Approved<select id="sApproved"><option value="true" '+(x?.approved===false?'':'selected')+'>Yes</option><option value="false" '+(x?.approved===false?'selected':'')+'>No</option></select></label>'+
     '<label class="full">Address<textarea id="sAddress">'+e(x?.address||'')+'</textarea></label>'+
     '<div class="full"><button class="btn primary">Save Supplier</button></div></form>');
   $('#supplierForm').onsubmit=async function(ev){
     ev.preventDefault();const ref=x?doc(db(),'suppliers',x.id):doc(collection(db(),'suppliers')),now=Timestamp.now();
-    const data={supplierCode:x?.supplierCode||('SUP-'+ref.id.slice(0,6).toUpperCase()),name:$('#sName').value.trim(),phone:$('#sPhone').value.trim(),email:$('#sEmail').value.trim(),ntn:$('#sTax').value.trim(),licenseType:$('#sLicType').value.trim(),licenseNo:$('#sLicNo').value.trim(),licenseExpiryDate:tsInput($('#sLicExpiry').value),manufacturerAuthorization:$('#sAuth').value.trim(),approved:$('#sApproved').value==='true',address:$('#sAddress').value.trim(),updatedAt:now,updatedBy:state().user.uid};
+    const file=$('#sFile')?.files?.[0]||null,licenseAttachment=file?await readAttachment(file):(x?.licenseAttachment||null);
+    const data={supplierCode:x?.supplierCode||('SUP-'+ref.id.slice(0,6).toUpperCase()),name:$('#sName').value.trim(),phone:$('#sPhone').value.trim(),email:$('#sEmail').value.trim(),ntn:$('#sTax').value.trim(),licenseType:$('#sLicType').value.trim(),licenseNo:$('#sLicNo').value.trim(),licenseExpiryDate:tsInput($('#sLicExpiry').value),manufacturerAuthorization:$('#sAuth').value.trim(),licenseAttachment,approved:$('#sApproved').value==='true',address:$('#sAddress').value.trim(),updatedAt:now,updatedBy:state().user.uid};
     if(!x){data.createdAt=now;data.createdBy=state().user.uid;}
     try{await setDoc(ref,data,{merge:true});await writeAudit(x?'supplier_updated':'supplier_created','supplier',ref.id,{supplierCode:data.supplierCode,name:data.name,licenseNo:data.licenseNo,approved:data.approved});close();toast('Supplier saved.');}catch(err){toast(err.message,true);}
   };
@@ -508,7 +535,8 @@ function printInspectorPack(){
   '<h3>Purchase Register</h3>'+simplePrintGrnTable()+
   '<h3>Sales Register / Batch Traceability</h3>'+simplePrintSalesTable(sales)+
   '<h3>Customer Licence Register</h3>'+simplePrintCustomerTable()+
-  '<h3>Quality Registers Summary</h3><p>Temperature logs: '+state().regTemperatureLogs.length+' | Returns: '+state().regReturns.length+' | Recalls: '+state().regRecalls.length+' | Complaints: '+state().regComplaints.length+' | CAPA: '+state().regCapa.length+'</p>'+
+  '<h3>Quality Registers Summary</h3><p>Temperature logs: '+state().regTemperatureLogs.length+' | Returns: '+state().regReturns.length+' | Recalls: '+state().regRecalls.length+' | Complaints: '+state().regComplaints.length+' | CAPA: '+state().regCapa.length+'</p>'+ 
+  '<h3>Computerized System Description & Access Control Matrix</h3><p>This is a multi-user cloud distribution ERP with role-based access, invoice approval, batch FEFO, customer/supplier licence controls, append-only audit records and backups.</p><table><tr><th>Role</th><th>Primary Controls</th></tr><tr><td>Admin</td><td>Full management, cancellation, configuration, backup</td></tr><tr><td>Marketing Director</td><td>Invoice approval, products, customers, suppliers, GDP records</td></tr><tr><td>ERP Manager</td><td>Masters, products, customers, GDP records, backups</td></tr><tr><td>Inventory</td><td>Batch stock, GRN, temperature, returns</td></tr><tr><td>Salesman</td><td>Assigned customers and invoice submission</td></tr><tr><td>Recovery</td><td>Approved receivables and payment entries</td></tr></table>'+
   '<p><b>Record retention configured:</b> '+e(String(p.recordRetentionYears||3))+' years. <b>System validation status:</b> '+e(p.systemValidationStatus||'draft')+'.</p>';
   const w=window.open('','_blank','width=1200,height=800');if(!w)return toast('Allow popups to print inspector pack.',true);w.document.write('<html><head><title>Drug Inspector Pack</title><style>body{font-family:Arial;padding:24px;color:#111}table{width:100%;border-collapse:collapse;margin:10px 0 24px}th,td{border:1px solid #999;padding:6px;font-size:12px}th{background:#eee}h1,h2,h3{color:#174b2f}</style></head><body>'+html+'<script>window.onload=()=>window.print()<\/script></body></html>');w.document.close();
   writeAudit('inspector_pack_printed','regulatory','inspector-pack',{approvedSales:sales.length,batches:state().regBatches.length});
