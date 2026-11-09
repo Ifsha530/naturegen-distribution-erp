@@ -437,6 +437,15 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /regulatoryDocuments/{documentId} {
+      allow read: if inspectionAccess();
+      allow create: if isManagement()
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.documentType in ['form2a_warranty','distribution_authority'];
+      allow update: if isManagement();
+      allow delete: if false;
+    }
+
     match /expenses/{expenseId} {
       allow read: if canManageExpenses();
 
