@@ -18,7 +18,8 @@ const COLLECTIONS=[
   ['controlledDrugRegister','regControlled'],
   ['selfInspections','regInspections'],
   ['capaActions','regCapa'],
-  ['equipmentCalibrations','regCalibrations']
+  ['equipmentCalibrations','regCalibrations'],
+  ['regulatoryDocuments','regDocuments']
 ];
 
 export function initRegulatoryContext(value){ ctx=value; }
@@ -67,8 +68,8 @@ export function attachRegulatoryListeners(){
     const unsub=onSnapshot(collection(db(),col),function(snap){
       s[key]=snap.docs.map(x=>Object.assign({id:x.id},x.data()));
       if(key==='regBatches')setTimeout(autoExpireBatches,0);
-      if(['regGrns','regTemperatureLogs','regReturns','regRecalls','regComplaints','regControlled','regInspections','regCapa','regCalibrations'].includes(key)){
-        const field=key==='regTemperatureLogs'?'recordedAt':key==='regControlled'?'transactionDate':key==='regCalibrations'?'nextDueDate':'createdAt';
+      if(['regGrns','regTemperatureLogs','regReturns','regRecalls','regComplaints','regControlled','regInspections','regCapa','regCalibrations','regDocuments'].includes(key)){
+        const field=key==='regTemperatureLogs'?'recordedAt':key==='regControlled'?'transactionDate':key==='regCalibrations'?'nextDueDate':key==='regDocuments'?'documentDate':'createdAt';
         s[key]=sortDateDesc(s[key],field);
       }
       if(s.page==='regulatory')renderRegulatory();
@@ -115,6 +116,7 @@ function regulatoryTabs(){
     ['complaints','Complaints'],
     ['controlled','Controlled Drugs'],
     ['capa','Self Inspection / CAPA'],
+    ['documents','Warranty / Authority'],
     ['inspector','Inspector Pack']
   ];
   return '<div class="actions" style="flex-wrap:wrap;margin-bottom:16px">'+tabs.map(function(t){
@@ -136,6 +138,7 @@ export function renderRegulatory(){
   else if(currentTab==='complaints')body=renderComplaints();
   else if(currentTab==='controlled')body=renderControlled();
   else if(currentTab==='capa')body=renderCapa();
+  else if(currentTab==='documents')body=renderDocuments();
   else body=renderInspectorPack();
   host.innerHTML='<div class="section-head"><div><h3>Drug Inspector / GDP Compliance</h3><div class="muted">Batch traceability, licences, storage, recall, returns, complaints and inspection evidence.</div></div></div>'+regulatoryTabs()+body;
   $$('[data-reg-tab]').forEach(function(b){b.onclick=function(){currentTab=b.dataset.regTab;renderRegulatory();};});
@@ -164,6 +167,7 @@ function renderOverview(){
     readinessRow('Temperature / calibration records',s.regTemperatureLogs.length>0,currentTabLink('temperature'))+
     readinessRow('Recall / return / complaint registers',true,currentTabLink('recalls'))+
     readinessRow('Self-inspection and CAPA register',s.regInspections.length>0||s.regCapa.length>0,currentTabLink('capa'))+
+    readinessRow('Warranty / authority document register',true,currentTabLink('documents'))+
     readinessRow('Append-only audit trail and backups',true,'Existing ERP controls')+
     '</div>'+
     '<div class="section-head"><h3>Immediate Alerts</h3></div>'+
@@ -292,6 +296,136 @@ function renderCapa(){
     (capa.length?'':'<tr><td colspan="9" class="empty">No CAPA records.</td></tr>')+'</tbody></table></div>';
 }
 
+
+function renderDocuments(){
+  const rows=state().regDocuments||[];
+  return '<div class="section-head"><div><h3>Warranty / Authority Documents</h3><div class="muted">Generate Form 2A warranty from approved invoices and manufacturer/importer distribution authority letters.</div></div><div class="actions">'+
+    (activeManagement()?'<button id="newWarrantyBtn" class="btn primary">+ Form 2A Warranty</button><button id="newAuthorityBtn" class="btn ghost">+ Authority Letter</button>':'')+
+    '</div></div>'+
+    '<div class="card"><h3>Document Controls</h3><p>Generated documents remain in the regulatory register. A generated draft does not replace the required signature/seal or the actual manufacturer/importer authorization. Signed copies can be attached and marked as held.</p></div>'+
+    '<div class="table-wrap" style="margin-top:16px"><table class="table"><thead><tr><th>Document No.</th><th>Date</th><th>Type</th><th>Related Invoice</th><th>Issuer</th><th>Recipient</th><th>Status</th><th>Signed Copy</th><th></th></tr></thead><tbody>'+
+    rows.map(function(x){return '<tr><td><b>'+e(x.documentNo||x.id)+'</b></td><td>'+e(d(x.documentDate||x.createdAt))+'</td><td>'+e(x.documentType==='form2a_warranty'?'Form 2A Warranty':'Authority Letter')+'</td><td>'+e(x.invoiceNo||'—')+'</td><td>'+e(x.issuerName||'')+'</td><td>'+e(x.recipientName||'')+'</td><td>'+statusBadge(x.status==='signed_copy_held'?'Signed copy held':'Draft',x.status==='signed_copy_held')+'</td><td>'+(x.signedAttachment?'<button class="btn ghost small" data-doc-copy="'+x.id+'">View</button>':'—')+'</td><td><button class="btn ghost small" data-print-regdoc="'+x.id+'">Print</button></td></tr>';}).join('')+
+    (rows.length?'':'<tr><td colspan="9" class="empty">No warranty/authority documents generated yet.</td></tr>')+
+    '</tbody></table></div>';
+}
+
+function approvedSalesForWarranty(){
+  return state().sales.filter(function(s){return (s.status||'approved')==='approved' && !s.operationalHidden;});
+}
+
+function openWarrantyForm(){
+  if(!activeManagement())return;
+  const sales=approvedSalesForWarranty();
+  if(!sales.length)return toast('No approved invoice is available for Form 2A warranty.',true);
+  const p=state().regProfile||{};
+  modal('Generate Form 2A Warranty','<form id="warrantyForm" class="form-grid">'+
+    '<label>Approved Invoice<select id="wInvoice" required><option value="">Select</option>'+selectOptions(sales,s=>(s.invoiceNo||'')+' — '+customerName(s.customerId),'')+'</select></label>'+
+    '<label>Document Date<input id="wDate" type="date" value="'+todayISO()+'" required></label>'+
+    '<label>Warranty Signatory<input id="wSignatory" required value="'+e(p.responsiblePersonName||state().me?.fullName||'')+'"></label>'+
+    '<label>Business / Distributor Name<input id="wBusiness" required value="'+e(C().COMPANY_NAME)+'"></label>'+
+    '<label class="full">Business Address<textarea id="wAddress" required>'+e(p.premisesAddress||state().settings?.address||'')+'</textarea></label>'+
+    '<label>Capacity<select id="wCapacity"><option value="authorised agent">Authorised Agent</option><option value="importer">Importer</option><option value="indenter">Indenter</option><option value="manufacturer">Manufacturer</option></select></label>'+
+    '<label>Principal Manufacturer / Importer<input id="wPrincipal" placeholder="Company whose authorized agent you are"></label>'+
+    '<label>Authority Letter No.<input id="wAuthorityNo" placeholder="If applicable"></label>'+
+    '<label>Authority Letter Date<input id="wAuthorityDate" type="date"></label>'+
+    '<label>Status<select id="wStatus"><option value="draft">Draft — signature/seal pending</option><option value="signed_copy_held">Signed / stamped copy held</option></select></label>'+
+    '<label>Signed Copy (optional, ≤450 KB)<input id="wSignedFile" type="file" accept=".pdf,image/*"></label>'+
+    '<label class="full">Additional Reference / Notes<textarea id="wNotes"></textarea></label>'+
+    '<div class="full help">Form 2A is generated from the selected approved invoice. Product names and batch numbers are taken from the invoice batch allocations.</div>'+
+    '<div class="full"><button class="btn primary">Generate & Save Warranty</button></div></form>');
+  $('#warrantyForm').onsubmit=async function(ev){
+    ev.preventDefault();
+    const sale=state().sales.find(x=>x.id===$('#wInvoice').value);if(!sale)return;
+    const cust=state().customers.find(x=>x.id===sale.customerId);
+    const items=(sale.items||[]).map(function(it){return {productId:it.productId,name:it.name||productName(it.productId),batchNumbers:(it.batchAllocations||[]).map(a=>a.batchNo).filter(Boolean),expiryDates:(it.batchAllocations||[]).map(a=>a.expiryDate).filter(Boolean),qty:Number(it.issuedQty||0),manufacturer:it.manufacturer||productById(it.productId)?.manufacturer||'',registrationNo:it.registrationNo||productById(it.productId)?.registrationNo||''};});
+    const ref=doc(collection(db(),'regulatoryDocuments')),file=$('#wSignedFile')?.files?.[0]||null,signedAttachment=file?await readAttachment(file):null,now=Timestamp.now();
+    const data={documentNo:'WTY-'+ref.id.slice(0,8).toUpperCase(),documentType:'form2a_warranty',documentDate:tsInput($('#wDate').value),invoiceId:sale.id,invoiceNo:sale.invoiceNo,invoiceDate:sale.saleDate,customerId:sale.customerId,recipientName:cust?.shopName||cust?.customerName||'',recipientAddress:cust?.address||'',recipientLicenseNo:cust?.drugSaleLicenseNo||'',issuerName:$('#wBusiness').value.trim(),issuerAddress:$('#wAddress').value.trim(),signatoryName:$('#wSignatory').value.trim(),capacity:$('#wCapacity').value,principalName:$('#wPrincipal').value.trim(),authorityLetterNo:$('#wAuthorityNo').value.trim(),authorityLetterDate:$('#wAuthorityDate').value?tsInput($('#wAuthorityDate').value):null,items,status:$('#wStatus').value,signedAttachment,notes:$('#wNotes').value.trim(),createdBy:state().user.uid,createdByName:state().me?.fullName||'',createdAt:now,updatedAt:now};
+    try{await setDoc(ref,data);await writeAudit('form2a_warranty_generated','regulatory_document',ref.id,{documentNo:data.documentNo,invoiceNo:data.invoiceNo,status:data.status,itemCount:items.length});close();toast('Form 2A warranty generated and saved.');setTimeout(function(){printRegulatoryDocumentById(ref.id);},300);}catch(err){toast(err.message,true);}
+  };
+}
+
+function openAuthorityForm(){
+  if(!activeManagement())return;
+  const p=state().regProfile||{},supplierOptions=state().regSuppliers.filter(x=>x.approved===true);
+  modal('Generate Distribution Authority Letter','<form id="authorityForm" class="form-grid">'+
+    '<label>Approved Supplier / Manufacturer (optional)<select id="aSupplier"><option value="">Manual issuer</option>'+selectOptions(supplierOptions,x=>x.name,'')+'</select></label>'+
+    '<label>Authority Letter No.<input id="aNo" required placeholder="AUTH-2026-001"></label>'+
+    '<label>Issue Date<input id="aDate" type="date" value="'+todayISO()+'" required></label>'+
+    '<label>Valid From<input id="aFrom" type="date" value="'+todayISO()+'"></label>'+
+    '<label>Valid To<input id="aTo" type="date"></label>'+
+    '<label>Issuer / Manufacturer / Importer<input id="aIssuer" required></label>'+
+    '<label>Issuer Licence / Registration No.<input id="aIssuerLicense"></label>'+
+    '<label class="full">Issuer Address<textarea id="aIssuerAddress" required></textarea></label>'+
+    '<label>Authorized Distributor<input id="aRecipient" required value="'+e(C().COMPANY_NAME)+'"></label>'+
+    '<label>Distributor Drug Sale Licence<input id="aRecipientLicense" value="'+e(p.distributionLicenseNo||'')+'"></label>'+
+    '<label class="full">Distributor Address<textarea id="aRecipientAddress" required>'+e(p.premisesAddress||state().settings?.address||'')+'</textarea></label>'+
+    '<label>Territory / Jurisdiction<input id="aTerritory" value="Lahore, Punjab, Pakistan"></label>'+
+    '<label>Authorized Signatory Name<input id="aSignatory" required></label>'+
+    '<label>Signatory Designation<input id="aDesignation" required></label>'+
+    '<label class="full">Products / Product Range<textarea id="aProducts" required placeholder="List products or write: All products lawfully supplied by the issuer"></textarea></label>'+
+    '<label class="full">Authorization Scope<textarea id="aScope">To purchase, store, distribute and supply the above products within the stated territory in accordance with applicable drug laws, storage conditions and approved distribution practices.</textarea></label>'+
+    '<label>Status<select id="aStatus"><option value="draft">Draft — issuer signature/seal pending</option><option value="signed_copy_held">Signed / stamped copy held</option></select></label>'+
+    '<label>Signed Copy (optional, ≤450 KB)<input id="aSignedFile" type="file" accept=".pdf,image/*"></label>'+
+    '<div class="full help">The authority letter is only valid when actually issued/signed/stamped by the named manufacturer/importer or other competent issuer. The ERP does not create legal authority by itself.</div>'+
+    '<div class="full"><button class="btn primary">Generate & Save Authority Letter</button></div></form>');
+  $('#aSupplier').onchange=function(){const s=supplierById(this.value);if(!s)return;$('#aIssuer').value=s.name||'';$('#aIssuerLicense').value=s.licenseNo||'';$('#aIssuerAddress').value=s.address||'';};
+  $('#authorityForm').onsubmit=async function(ev){
+    ev.preventDefault();const ref=doc(collection(db(),'regulatoryDocuments')),file=$('#aSignedFile')?.files?.[0]||null,signedAttachment=file?await readAttachment(file):null,now=Timestamp.now();
+    const data={documentNo:$('#aNo').value.trim()||('AUTH-'+ref.id.slice(0,8).toUpperCase()),documentType:'distribution_authority',documentDate:tsInput($('#aDate').value),validFrom:$('#aFrom').value?tsInput($('#aFrom').value):null,validTo:$('#aTo').value?tsInput($('#aTo').value):null,issuerSupplierId:$('#aSupplier').value,issuerName:$('#aIssuer').value.trim(),issuerLicenseNo:$('#aIssuerLicense').value.trim(),issuerAddress:$('#aIssuerAddress').value.trim(),recipientName:$('#aRecipient').value.trim(),recipientLicenseNo:$('#aRecipientLicense').value.trim(),recipientAddress:$('#aRecipientAddress').value.trim(),territory:$('#aTerritory').value.trim(),productsText:$('#aProducts').value.trim(),authorizationScope:$('#aScope').value.trim(),signatoryName:$('#aSignatory').value.trim(),signatoryDesignation:$('#aDesignation').value.trim(),status:$('#aStatus').value,signedAttachment,createdBy:state().user.uid,createdByName:state().me?.fullName||'',createdAt:now,updatedAt:now};
+    try{await setDoc(ref,data);await writeAudit('distribution_authority_generated','regulatory_document',ref.id,{documentNo:data.documentNo,issuer:data.issuerName,recipient:data.recipientName,status:data.status});close();toast('Authority letter generated and saved.');setTimeout(function(){printRegulatoryDocumentById(ref.id);},300);}catch(err){toast(err.message,true);}
+  };
+}
+
+function printRegulatoryDocumentById(id){
+  const x=(state().regDocuments||[]).find(z=>z.id===id);
+  if(x)return printRegulatoryDocument(x);
+  getDoc(doc(db(),'regulatoryDocuments',id)).then(function(s){if(s.exists())printRegulatoryDocument(Object.assign({id:s.id},s.data()));});
+}
+function printRegulatoryDocument(x){
+  if(x.documentType==='form2a_warranty')return printWarrantyDocument(x);
+  return printAuthorityDocument(x);
+}
+function documentPrintWindow(title,body){
+  const w=window.open('','_blank','width=1000,height=800');if(!w)return toast('Allow popups to print documents.',true);
+  w.document.write('<html><head><title>'+e(title)+'</title><style>body{font-family:Arial;padding:34px;color:#111;line-height:1.45}.letterhead{text-align:center;border-bottom:2px solid #174b2f;padding-bottom:10px;margin-bottom:22px}.letterhead h1{margin:0;color:#174b2f}.center{text-align:center}.right{text-align:right}.muted{color:#666}.draft{border:2px solid #b33;color:#b33;padding:8px;text-align:center;font-weight:bold;margin:12px 0}table{width:100%;border-collapse:collapse;margin:16px 0}th,td{border:1px solid #888;padding:7px;text-align:left;font-size:12px}th{background:#eee}.signature{margin-top:50px;display:grid;grid-template-columns:1fr 1fr;gap:60px}.signature div{border-top:1px solid #333;padding-top:6px}.note{font-size:11px;color:#555;margin-top:24px}</style></head><body>'+body+'<script>window.onload=()=>window.print()<\/script></body></html>');w.document.close();
+}
+function printWarrantyDocument(x){
+  const itemRows=(x.items||[]).map(function(it){return '<tr><td>'+e(it.name||'')+'</td><td>'+e((it.batchNumbers||[]).join(', '))+'</td><td>'+f(it.qty||0)+'</td><td>'+e(it.manufacturer||'')+'</td><td>'+e(it.registrationNo||'')+'</td></tr>';}).join('');
+  const body='<div class="letterhead"><h1>'+e(x.issuerName||C().COMPANY_NAME)+'</h1><div>'+e(x.issuerAddress||'')+'</div></div>'+
+    (x.status==='signed_copy_held'?'':'<div class="draft">DRAFT — SIGNATURE / SEAL REQUIRED</div>')+
+    '<h2 class="center">FORM 2A</h2><h3 class="center">Warranty under Section 23(1)(i) of the Drugs Act, 1976</h3>'+
+    '<p>I, <b>'+e(x.signatoryName||'')+'</b>, being a person resident in Pakistan and carrying on business at <b>'+e(x.issuerAddress||'')+'</b> under the name of <b>'+e(x.issuerName||'')+'</b>'+
+    (x.principalName?' and acting as '+e(x.capacity||'authorised agent')+' of <b>'+e(x.principalName)+'</b>':'')+
+    ', give warranty that the drugs described below and supplied under the referenced sale document do not contravene the applicable requirements of section 23 of the Drugs Act, 1976.</p>'+
+    '<p><b>Warranty No.:</b> '+e(x.documentNo||'')+' &nbsp; <b>Date:</b> '+e(d(x.documentDate))+'<br><b>Invoice / Sale Document:</b> '+e(x.invoiceNo||'')+' dated '+e(d(x.invoiceDate))+'<br><b>Supplied to:</b> '+e(x.recipientName||'')+' — '+e(x.recipientAddress||'')+'<br><b>Customer Drug Sale Licence:</b> '+e(x.recipientLicenseNo||'')+'</p>'+
+    '<table><tr><th>Name of Drug</th><th>Batch Number(s)</th><th>Qty Supplied</th><th>Manufacturer</th><th>Registration No.</th></tr>'+itemRows+'</table>'+
+    (x.authorityLetterNo?'<p><b>Authority Letter:</b> '+e(x.authorityLetterNo)+' '+(x.authorityLetterDate?'dated '+e(d(x.authorityLetterDate)):'')+'</p>':'')+
+    '<div class="signature"><div>Authorized Signatory<br>'+e(x.signatoryName||'')+'</div><div>Company Seal / Stamp</div></div>'+
+    '<p class="note">Generated from the ERP invoice and batch traceability record. Legal effectiveness requires the appropriate authorized signature/seal and genuine underlying authority, where applicable.</p>';
+  documentPrintWindow('Form 2A Warranty '+(x.documentNo||''),body);
+  writeAudit('regulatory_document_printed','regulatory_document',x.id,{documentNo:x.documentNo,type:x.documentType});
+}
+function printAuthorityDocument(x){
+  const body='<div class="letterhead"><h1>'+e(x.issuerName||'Manufacturer / Importer')+'</h1><div>'+e(x.issuerAddress||'')+'</div></div>'+
+    (x.status==='signed_copy_held'?'':'<div class="draft">DRAFT — VALID ONLY WHEN SIGNED / STAMPED BY ISSUER</div>')+
+    '<p><b>Authority Letter No.:</b> '+e(x.documentNo||'')+'<span style="float:right"><b>Date:</b> '+e(d(x.documentDate))+'</span></p>'+
+    '<h2 class="center">DISTRIBUTION AUTHORITY LETTER</h2>'+
+    '<p>To Whom It May Concern,</p>'+
+    '<p>We, <b>'+e(x.issuerName||'')+'</b>, having our business address at <b>'+e(x.issuerAddress||'')+'</b>'+
+    (x.issuerLicenseNo?' and holding licence/registration <b>'+e(x.issuerLicenseNo)+'</b>':'')+
+    ', hereby authorize <b>'+e(x.recipientName||C().COMPANY_NAME)+'</b>, situated at <b>'+e(x.recipientAddress||'')+'</b>'+
+    (x.recipientLicenseNo?' and holding Drug Sale Licence <b>'+e(x.recipientLicenseNo)+'</b>':'')+
+    ', to act as our authorized distributor/agent for the products described below within <b>'+e(x.territory||'the authorized territory')+'</b>.</p>'+
+    '<p><b>Products / Product Range:</b><br>'+e(x.productsText||'')+'</p>'+
+    '<p><b>Scope:</b><br>'+e(x.authorizationScope||'')+'</p>'+
+    '<p><b>Validity:</b> '+e(d(x.validFrom))+(x.validTo?' to '+e(d(x.validTo)):' until withdrawn/replaced in writing')+'.</p>'+
+    '<p>This authority remains subject to applicable laws, valid product registrations/enlistments, storage requirements, licensing conditions and any limitations specifically imposed by the issuer or competent authority.</p>'+
+    '<div class="signature"><div>Authorized Signatory<br>'+e(x.signatoryName||'')+'<br>'+e(x.signatoryDesignation||'')+'</div><div>Issuer Seal / Stamp</div></div>'+
+    '<p class="note">This ERP-generated document does not itself create manufacturer/importer authority. It should only be treated as issued authority after signature/stamp by the named issuer and retention of the genuine signed copy.</p>';
+  documentPrintWindow('Distribution Authority '+(x.documentNo||''),body);
+  writeAudit('regulatory_document_printed','regulatory_document',x.id,{documentNo:x.documentNo,type:x.documentType});
+}
+
 function renderInspectorPack(){
   return '<div class="section-head"><div><h3>Drug Inspector Pack</h3><div class="muted">One-screen access to the core records commonly required for distribution traceability.</div></div><div class="actions"><button id="printInspectorPackBtn" class="btn primary">Print Inspector Pack</button><button id="printSystemPackBtn" class="btn ghost">System Validation / SOP Pack</button></div></div>'+
     '<div class="grid">'+
@@ -359,6 +493,12 @@ function bindCurrentTab(){
     if($('#addInspectionBtn'))$('#addInspectionBtn').onclick=openInspectionForm;
     if($('#addCapaBtn'))$('#addCapaBtn').onclick=function(){openCapaForm();};
     $$('[data-edit-capa]').forEach(b=>b.onclick=function(){openCapaForm(b.dataset.editCapa);});
+  }
+  if(currentTab==='documents'){
+    if($('#newWarrantyBtn'))$('#newWarrantyBtn').onclick=openWarrantyForm;
+    if($('#newAuthorityBtn'))$('#newAuthorityBtn').onclick=openAuthorityForm;
+    $('[data-print-regdoc]').forEach(b=>b.onclick=function(){printRegulatoryDocumentById(b.dataset.printRegdoc);});
+    $('[data-doc-copy]').forEach(b=>b.onclick=function(){const x=(state().regDocuments||[]).find(z=>z.id===b.dataset.docCopy);if(x?.signedAttachment?.dataUrl)window.open(x.signedAttachment.dataUrl,'_blank');});
   }
   if(currentTab==='inspector'&&$('#printInspectorPackBtn'))$('#printInspectorPackBtn').onclick=printInspectorPack;
   if(currentTab==='inspector'&&$('#printSystemPackBtn'))$('#printSystemPackBtn').onclick=printSystemControlPack;
