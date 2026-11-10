@@ -241,6 +241,19 @@ service cloud.firestore {
           && request.resource.data.editedBy == request.auth.uid
         )
         || (
+          isManagement()
+          && saleStatus(resource.data) == 'approved'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'paidAmount','paymentStatus','lastReversedPaymentId','updatedAt'
+          ])
+          && paymentAfter(request.resource.data.lastReversedPaymentId).data.saleId == saleId
+          && paymentAfter(request.resource.data.lastReversedPaymentId).data.reversed == true
+          && paymentAfter(request.resource.data.lastReversedPaymentId).data.reversedBy == request.auth.uid
+          && request.resource.data.paidAmount
+             == resource.data.get('paidAmount', 0)
+                - paymentAfter(request.resource.data.lastReversedPaymentId).data.amount
+        )
+        || (
           (isManagement() || (isSalesman() && resource.data.createdBy == request.auth.uid))
           && saleStatus(resource.data) in ['draft','rejected','pending_approval']
           && request.resource.data.status == 'cancelled'
