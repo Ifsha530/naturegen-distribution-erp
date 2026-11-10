@@ -220,7 +220,7 @@ function renderDashboard(){
 }
 
 function salesTable(rows,actions=true){
-  return `<div class="table-wrap"><table class="table"><thead><tr><th>Invoice</th><th>Date</th><th>Customer</th><th>Salesman</th><th>Total</th><th>Paid</th><th>Balance</th><th>Approval</th><th>Payment</th>${actions?'<th></th>':''}</tr></thead><tbody>${rows.map(s=>`<tr><td><b>${esc(s.invoiceNo)}</b></td><td>${date(s.saleDate)}</td><td>${esc(customerName(s.customerId))}</td><td>${esc(profileName(s.salesmanId))}</td><td>${money(s.total)}</td><td>${money(s.paidAmount)}</td><td>${money(Math.max(0,Number(s.total||0)-Number(s.paidAmount||0)))}</td><td>${statusBadge(s)}</td><td>${badgeStatus(s.paymentStatus)}</td>${actions?`<td><button class="btn ghost small" data-invoice="${s.id}">View</button></td>`:''}</tr>`).join('')||`<tr><td colspan="${actions?10:9}" class="empty">No invoices found.</td></tr>`}</tbody></table></div>`;
+  return `<div class="table-wrap"><table class="table"><thead><tr><th>Invoice</th><th>Date</th><th>Customer</th><th>Salesman</th><th>Total</th><th>Paid</th><th>Balance</th><th>Approval</th><th>Payment</th>${actions?'<th></th>':''}</tr></thead><tbody>${rows.map(s=>`<tr><td><b>${esc(s.invoiceNo)}</b></td><td>${date(s.saleDate)}</td><td>${esc(customerName(s.customerId))}</td><td>${esc(profileName(s.salesmanId))}</td><td>${money(s.total)}</td><td>${money(s.paidAmount)}</td><td>${money(Math.max(0,Number(s.total||0)-Number(s.paidAmount||0)))}</td><td>${statusBadge(s)}</td><td>${badgeStatus(s.paymentStatus)}</td>${actions?`<td><div class="actions"><button class="btn ghost small" data-invoice="${s.id}">View</button>${(canEditOperational()||s.createdBy===state.user.uid)?`<button class="btn ghost small" data-invoice-edit="${s.id}">Edit</button>`:''}${(can('admin')||((canEditOperational()||s.createdBy===state.user.uid)&&['draft','rejected','pending_approval'].includes(invoiceStatus(s))))?`<button class="btn danger small" data-invoice-delete="${s.id}">Delete</button>`:''}</div></td>`:''}</tr>`).join('')||`<tr><td colspan="${actions?10:9}" class="empty">No invoices found.</td></tr>`}</tbody></table></div>`;
 }
 
 function renderSales(){
@@ -237,8 +237,21 @@ function renderSales(){
   };
   $('#saleSearch').oninput=refresh; $('#saleStatusFilter').onchange=refresh; if($('#saleRepFilter')) $('#saleRepFilter').onchange=refresh; bindInvoiceButtons();
 }
-function bindInvoiceButtons(){ $$('[data-invoice]').forEach(b=>b.onclick=()=>openInvoice(b.dataset.invoice)); }
+function bindInvoiceButtons(){ $('[data-invoice]').forEach(b=>b.onclick=()=>openInvoice(b.dataset.invoice)); $('[data-invoice-edit]').forEach(b=>b.onclick=()=>editInvoiceRecord(b.dataset.invoiceEdit)); $('[data-invoice-delete]').forEach(b=>b.onclick=()=>deleteInvoiceRecord(b.dataset.invoiceDelete)); }
 
+function editInvoiceRecord(id){
+  const s=state.sales.find(x=>x.id===id);if(!s)return;if(!(canEditOperational()||s.createdBy===state.user.uid))return;
+  showModal('Edit Invoice — '+s.invoiceNo,`<form id="invoiceRecordEditForm" class="form-grid"><label class="full">Invoice Notes<textarea id="invoiceRecordNotes">${esc(s.notes||'')}</textarea></label><label class="full">Correction / Edit Reason<textarea id="invoiceRecordReason" required></textarea></label><div class="full help">Financial, customer, batch and stock fields are transaction-controlled. For a financial correction, Delete/Cancel & Reverse the invoice and create the corrected invoice.</div><div class="full"><button class="btn primary">Save Edit</button></div></form>`);
+  $('#invoiceRecordEditForm').onsubmit=async e=>{e.preventDefault();const reason=$('#invoiceRecordReason').value.trim();if(!reason)return;try{await updateDoc(doc(db,'sales',id),{notes:$('#invoiceRecordNotes').value.trim(),correctionReason:reason,editedBy:state.user.uid,editedByName:state.me?.fullName||'',editedAt:Timestamp.now(),updatedAt:Timestamp.now()});await writeAudit('invoice_record_edited','invoice',id,{invoiceNo:s.invoiceNo,status:invoiceStatus(s),reason});closeModal();toast('Invoice edit saved.');}catch(err){toast(err.message,true);}};
+}
+function deleteInvoiceRecord(id){
+  const s=state.sales.find(x=>x.id===id);if(!s)return;const st=invoiceStatus(s);
+  if(['cancelled','void_duplicate','purged_duplicate'].includes(st))return toast('This invoice is already closed/archived.',true);
+  if(st==='approved'){if(!can('admin'))return toast('Only Admin can delete an approved invoice. Delete uses Cancel & Reverse.',true);return cancelInvoice(id,false);}
+  if(!(canEditOperational()||s.createdBy===state.user.uid))return;
+  showModal('Delete Invoice — '+s.invoiceNo,`<form id="deleteInvoiceRecordForm" class="stack"><div class="approval-note">No approved stock/ledger effect exists. The invoice will be archived as cancelled and remain traceable in Audit Trail.</div><label>Mandatory reason<textarea id="deleteInvoiceRecordReason" required></textarea></label><button class="btn danger">Delete / Archive Invoice</button></form>`);
+  $('#deleteInvoiceRecordForm').onsubmit=async e=>{e.preventDefault();const reason=$('#deleteInvoiceRecordReason').value.trim();if(!reason)return;try{await updateDoc(doc(db,'sales',id),{status:'cancelled',dispatchEligible:false,stockApplied:false,softDeleted:true,cancellationReason:reason,cancelledBy:state.user.uid,cancelledByName:state.me?.fullName||'',cancelledAt:Timestamp.now(),updatedAt:Timestamp.now()});await writeAudit('invoice_soft_deleted','invoice',id,{invoiceNo:s.invoiceNo,previousStatus:st,reason});closeModal();toast('Invoice deleted from active workflow; history preserved.');}catch(err){toast(err.message,true);}};
+}
 function openSaleForm(){
   if(!state.customers.filter(c=>c.active!==false).length) return toast('Add an active customer first.',true);
   if(!activeProducts().length) return toast('No active products available.',true);
