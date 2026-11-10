@@ -11,7 +11,7 @@ import {
   initRegulatoryContext, attachRegulatoryListeners, renderRegulatory,
   applyFefoToApproval, restoreSaleBatches, batchText, expiryText,
   validateCustomerLicense
-} from './regulatory.js?v=20261110-edit-delete-v1';
+} from './regulatory.js?v=20261110-edit-delete-v2';
 
 const C = window.NATUREGEN_FIREBASE_CONFIG || {};
 const COMPANY_NAME = 'Nature Gen Distributaion';
