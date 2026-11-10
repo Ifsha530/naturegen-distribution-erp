@@ -75,8 +75,8 @@ function archiveRegulatoryRecord(collectionName,key,id,label){
   $('#regGenericDeleteForm').onsubmit=async function(ev){ev.preventDefault();const reason=$('#regGenericDeleteReason').value.trim();if(!reason)return;try{await updateDoc(doc(db(),collectionName,id),{archived:true,archiveReason:reason,archivedBy:state().user.uid,archivedByName:state().me?.fullName||'',archivedAt:serverTimestamp(),updatedAt:serverTimestamp()});await writeAudit('regulatory_record_archived',collectionName,id,{label,reason});close();toast(label+' deleted from active register; history preserved.');}catch(err){toast(err.message,true);}};
 }
 function bindGenericRegActions(){
-  $('[data-reg-edit]').forEach(b=>b.onclick=function(){editRegulatoryRecord(b.dataset.regEdit,b.dataset.regKey,b.dataset.regId,b.dataset.regLabel||'Record');});
-  $('[data-reg-delete]').forEach(b=>b.onclick=function(){archiveRegulatoryRecord(b.dataset.regDelete,b.dataset.regKey,b.dataset.regId,b.dataset.regLabel||'Record');});
+  $$('[data-reg-edit]').forEach(b=>b.onclick=function(){editRegulatoryRecord(b.dataset.regEdit,b.dataset.regKey,b.dataset.regId,b.dataset.regLabel||'Record');});
+  $$('[data-reg-delete]').forEach(b=>b.onclick=function(){archiveRegulatoryRecord(b.dataset.regDelete,b.dataset.regKey,b.dataset.regId,b.dataset.regLabel||'Record');});
 }
 
 export function attachRegulatoryListeners(){
