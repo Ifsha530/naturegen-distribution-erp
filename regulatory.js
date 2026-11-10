@@ -59,6 +59,25 @@ function batchById(id){ return state().regBatches.find(x=>x.id===id); }
 function statusBadge(text,ok){ return '<span class="badge '+(ok?'status-approved':'status-cancelled')+'">'+e(text)+'</span>'; }
 function selectOptions(rows,labelFn,selected){ return rows.map(x=>'<option value="'+e(x.id)+'" '+(selected===x.id?'selected':'')+'>'+e(labelFn(x))+'</option>').join(''); }
 function sortDateDesc(rows,field){ return rows.slice().sort((a,b)=>(asDate(b[field])?.getTime()||0)-(asDate(a[field])?.getTime()||0)); }
+function regRows(key){ return (state()[key]||[]).filter(x=>x.archived!==true); }
+function regActions(collection,key,id,label,extra=''){
+  if(!activeManagement())return extra||'';
+  return '<div class="actions">'+extra+'<button class="btn ghost small" data-reg-edit="'+e(collection)+'" data-reg-key="'+e(key)+'" data-reg-id="'+e(id)+'" data-reg-label="'+e(label)+'">Edit</button><button class="btn danger small" data-reg-delete="'+e(collection)+'" data-reg-key="'+e(key)+'" data-reg-id="'+e(id)+'" data-reg-label="'+e(label)+'">Delete</button></div>';
+}
+function editRegulatoryRecord(collectionName,key,id,label){
+  if(!activeManagement())return;const row=(state()[key]||[]).find(x=>x.id===id);if(!row)return;
+  modal('Edit '+label,'<form id="regGenericEditForm" class="form-grid"><label class="full">Correction / Edit Note<textarea id="regGenericNote" required>'+e(row.correctionNote||'')+'</textarea></label><div class="full help">Regulatory transaction values remain traceable. Use the record-specific Update/Status button where available for operational fields.</div><div class="full"><button class="btn primary">Save Edit</button></div></form>');
+  $('#regGenericEditForm').onsubmit=async function(ev){ev.preventDefault();try{await updateDoc(doc(db(),collectionName,id),{correctionNote:$('#regGenericNote').value.trim(),correctedBy:state().user.uid,correctedByName:state().me?.fullName||'',correctedAt:serverTimestamp(),updatedAt:serverTimestamp()});await writeAudit('regulatory_record_edited',collectionName,id,{label});close();toast(label+' edit saved.');}catch(err){toast(err.message,true);}};
+}
+function archiveRegulatoryRecord(collectionName,key,id,label){
+  if(!activeManagement())return;const row=(state()[key]||[]).find(x=>x.id===id);if(!row)return;
+  modal('Delete / Archive '+label,'<form id="regGenericDeleteForm" class="stack"><div class="approval-note">The row will disappear from the active register but remain preserved in Audit Trail and backups.</div><label>Mandatory reason<textarea id="regGenericDeleteReason" required></textarea></label><button class="btn danger">Delete / Archive</button></form>');
+  $('#regGenericDeleteForm').onsubmit=async function(ev){ev.preventDefault();const reason=$('#regGenericDeleteReason').value.trim();if(!reason)return;try{await updateDoc(doc(db(),collectionName,id),{archived:true,archiveReason:reason,archivedBy:state().user.uid,archivedByName:state().me?.fullName||'',archivedAt:serverTimestamp(),updatedAt:serverTimestamp()});await writeAudit('regulatory_record_archived',collectionName,id,{label,reason});close();toast(label+' deleted from active register; history preserved.');}catch(err){toast(err.message,true);}};
+}
+function bindGenericRegActions(){
+  $('[data-reg-edit]').forEach(b=>b.onclick=function(){editRegulatoryRecord(b.dataset.regEdit,b.dataset.regKey,b.dataset.regId,b.dataset.regLabel||'Record');});
+  $('[data-reg-delete]').forEach(b=>b.onclick=function(){archiveRegulatoryRecord(b.dataset.regDelete,b.dataset.regKey,b.dataset.regId,b.dataset.regLabel||'Record');});
+}
 
 export function attachRegulatoryListeners(){
   if(!inspectionAccess())return;
@@ -211,23 +230,23 @@ function renderProfile(){
 
 function renderSuppliers(){
   const s=state(), canEdit=activeManagement();
-  const suppliers=s.regSuppliers.slice().sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+  const suppliers=regRows('regSuppliers').slice().sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
   return '<div class="section-head"><h3>Approved Supplier Register</h3>'+(canEdit?'<button id="addSupplierBtn" class="btn primary">+ Add Supplier</button>':'')+'</div>'+
     '<div class="table-wrap"><table class="table"><thead><tr><th>Code</th><th>Supplier</th><th>Licence</th><th>Expiry</th><th>Manufacturer Authorization</th><th>Licence Copy</th><th>Status</th><th></th></tr></thead><tbody>'+
-    suppliers.map(x=>'<tr><td>'+e(x.supplierCode||'')+'</td><td><b>'+e(x.name||'')+'</b><div class="metric-note">'+e(x.address||'')+'</div></td><td>'+e(x.licenseType||'')+'<br>'+e(x.licenseNo||'')+'</td><td>'+e(d(x.licenseExpiryDate))+'</td><td>'+e(x.manufacturerAuthorization||'')+'</td><td>'+(x.licenseAttachment?'<button class="btn ghost small" data-supplier-copy="'+x.id+'">View</button>':'—')+'</td><td>'+statusBadge(x.approved===true&&!expired(x.licenseExpiryDate)?'Approved':'Review required',x.approved===true&&!expired(x.licenseExpiryDate))+'</td><td>'+(canEdit?'<button class="btn ghost small" data-edit-supplier="'+x.id+'">Edit</button>':'')+'</td></tr>').join('')+
+    suppliers.map(x=>'<tr><td>'+e(x.supplierCode||'')+'</td><td><b>'+e(x.name||'')+'</b><div class="metric-note">'+e(x.address||'')+'</div></td><td>'+e(x.licenseType||'')+'<br>'+e(x.licenseNo||'')+'</td><td>'+e(d(x.licenseExpiryDate))+'</td><td>'+e(x.manufacturerAuthorization||'')+'</td><td>'+(x.licenseAttachment?'<button class="btn ghost small" data-supplier-copy="'+x.id+'">View</button>':'—')+'</td><td>'+statusBadge(x.approved===true&&!expired(x.licenseExpiryDate)?'Approved':'Review required',x.approved===true&&!expired(x.licenseExpiryDate))+'</td><td>'+(canEdit?regActions('suppliers','regSuppliers',x.id,'Supplier','<button class="btn ghost small" data-edit-supplier="'+x.id+'">Full Edit</button>'):'')+'</td></tr>').join('')+
     (suppliers.length?'':'<tr><td colspan="8" class="empty">No suppliers added.</td></tr>')+'</tbody></table></div>'+
     '<div class="section-head"><div><h3>Purchase / GRN Batch Receiving</h3><div class="muted">Each receipt creates traceable batch stock.</div></div>'+((activeManagement()||can('inventory'))?'<button id="addGrnBtn" class="btn primary">+ Receive GRN / Batch</button>':'')+'</div>'+
     grnTable();
 }
 function grnTable(){
-  const rows=state().regGrns.slice(0,100);
-  return '<div class="table-wrap"><table class="table"><thead><tr><th>GRN</th><th>Date</th><th>Supplier</th><th>Invoice</th><th>Product</th><th>Batch</th><th>Expiry</th><th>Qty</th><th>Status</th></tr></thead><tbody>'+
+  const rows=regRows('regGrns').slice(0,100);
+  return '<div class="table-wrap"><table class="table"><thead><tr><th>GRN</th><th>Date</th><th>Supplier</th><th>Invoice</th><th>Product</th><th>Batch</th><th>Expiry</th><th>Qty</th><th>Status</th><th>Actions</th></tr></thead><tbody>'+
     rows.map(x=>'<tr><td><b>'+e(x.grnNo||x.id)+'</b></td><td>'+e(d(x.receivedDate||x.createdAt))+'</td><td>'+e(x.supplierName||'')+'</td><td>'+e(x.purchaseInvoiceNo||'')+'</td><td>'+e(x.productName||productName(x.productId))+'</td><td>'+e(x.batchNo||'')+'</td><td>'+e(d(x.expiryDate))+'</td><td>'+f(x.receivedQty)+'</td><td>'+e(x.status||'')+'</td></tr>').join('')+
-    (rows.length?'':'<tr><td colspan="9" class="empty">No GRNs / batch receipts yet.</td></tr>')+'</tbody></table></div>';
+    (rows.length?'':'<tr><td colspan="10" class="empty">No GRNs / batch receipts yet.</td></tr>')+'</tbody></table></div>';
 }
 
 function renderBatches(){
-  const rows=state().regBatches.slice().sort(function(a,b){
+  const rows=regRows('regBatches').slice().sort(function(a,b){
     const pa=String(productName(a.productId)),pb=String(productName(b.productId));if(pa!==pb)return pa.localeCompare(pb);
     return (asDate(a.expiryDate)?.getTime()||0)-(asDate(b.expiryDate)?.getTime()||0);
   });
@@ -241,19 +260,19 @@ function renderBatches(){
 }
 
 function renderTemperature(){
-  const rows=state().regTemperatureLogs.slice(0,100), cal=state().regCalibrations.slice(0,100);
+  const rows=regRows('regTemperatureLogs').slice(0,100), cal=regRows('regCalibrations').slice(0,100);
   return '<div class="section-head"><h3>Temperature / Humidity Monitoring</h3>'+((activeManagement()||can('inventory'))?'<button id="addTempBtn" class="btn primary">+ Add Temperature Log</button>':'')+'</div>'+
     '<div class="table-wrap"><table class="table"><thead><tr><th>Date/Time</th><th>Location</th><th>Equipment</th><th>Min</th><th>Max</th><th>Current</th><th>Allowed</th><th>Excursion</th><th>Action</th><th></th></tr></thead><tbody>'+
-    rows.map(x=>'<tr><td>'+e(dt(x.recordedAt))+'</td><td>'+e(x.location||'')+'</td><td>'+e(x.equipmentId||'')+'</td><td>'+e(String(x.minTemp??''))+'</td><td>'+e(String(x.maxTemp??''))+'</td><td>'+e(String(x.currentTemp??''))+'</td><td>'+e(String(x.allowedMin??''))+' to '+e(String(x.allowedMax??''))+' °C</td><td>'+statusBadge(x.excursion?'Yes':'No',!x.excursion)+'</td><td>'+e(x.actionTaken||'')+'</td><td>'+(x.excursion===true&&x.closed!==true&&activeManagement()?'<button class="btn ghost small" data-close-temp="'+x.id+'">Close Excursion</button>':'')+'</td></tr>').join('')+
+    rows.map(x=>'<tr><td>'+e(dt(x.recordedAt))+'</td><td>'+e(x.location||'')+'</td><td>'+e(x.equipmentId||'')+'</td><td>'+e(String(x.minTemp??''))+'</td><td>'+e(String(x.maxTemp??''))+'</td><td>'+e(String(x.currentTemp??''))+'</td><td>'+e(String(x.allowedMin??''))+' to '+e(String(x.allowedMax??''))+' °C</td><td>'+statusBadge(x.excursion?'Yes':'No',!x.excursion)+'</td><td>'+e(x.actionTaken||'')+'</td><td>'+regActions('temperatureLogs','regTemperatureLogs',x.id,'Temperature Log',(x.excursion===true&&x.closed!==true&&activeManagement()?'<button class="btn ghost small" data-close-temp="'+x.id+'">Close Excursion</button>':''))+'</td></tr>').join('')+
     (rows.length?'':'<tr><td colspan="10" class="empty">No temperature records.</td></tr>')+'</tbody></table></div>'+
     '<div class="section-head"><h3>Monitoring Equipment / Calibration</h3>'+(activeManagement()?'<button id="addCalibrationBtn" class="btn primary">+ Add Calibration</button>':'')+'</div>'+
-    '<div class="table-wrap"><table class="table"><thead><tr><th>Equipment</th><th>Type</th><th>Location</th><th>Last Calibration</th><th>Next Due</th><th>Certificate Ref</th><th>Status</th></tr></thead><tbody>'+
-    cal.map(x=>'<tr><td>'+e(x.equipmentId||'')+'</td><td>'+e(x.equipmentType||'')+'</td><td>'+e(x.location||'')+'</td><td>'+e(d(x.lastCalibrationDate))+'</td><td>'+e(d(x.nextDueDate))+'</td><td>'+e(x.certificateRef||'')+'</td><td>'+statusBadge(expired(x.nextDueDate)?'OVERDUE':'Current',!expired(x.nextDueDate))+'</td></tr>').join('')+
-    (cal.length?'':'<tr><td colspan="7" class="empty">No calibration records.</td></tr>')+'</tbody></table></div>';
+    '<div class="table-wrap"><table class="table"><thead><tr><th>Equipment</th><th>Type</th><th>Location</th><th>Last Calibration</th><th>Next Due</th><th>Certificate Ref</th><th>Status</th><th>Actions</th></tr></thead><tbody>'+
+    cal.map(x=>'<tr><td>'+e(x.equipmentId||'')+'</td><td>'+e(x.equipmentType||'')+'</td><td>'+e(x.location||'')+'</td><td>'+e(d(x.lastCalibrationDate))+'</td><td>'+e(d(x.nextDueDate))+'</td><td>'+e(x.certificateRef||'')+'</td><td>'+statusBadge(expired(x.nextDueDate)?'OVERDUE':'Current',!expired(x.nextDueDate))+'</td><td>'+regActions('equipmentCalibrations','regCalibrations',x.id,'Calibration')+'</td></tr>').join('')+
+    (cal.length?'':'<tr><td colspan="8" class="empty">No calibration records.</td></tr>')+'</tbody></table></div>';
 }
 
 function renderReturns(){
-  const rows=state().regReturns.slice(0,100);
+  const rows=regRows('regReturns').slice(0,100);
   return '<div class="section-head"><div><h3>Customer Returns / Quarantine</h3><div class="muted">Returned stock remains non-saleable until documented disposition.</div></div>'+((activeManagement()||can('inventory'))?'<button id="addReturnBtn" class="btn primary">+ Record Return</button>':'')+'</div>'+
     '<div class="table-wrap"><table class="table"><thead><tr><th>Return</th><th>Date</th><th>Customer</th><th>Invoice</th><th>Product</th><th>Batch</th><th>Qty</th><th>Reason</th><th>Status</th><th></th></tr></thead><tbody>'+
     rows.map(x=>'<tr><td>'+e(x.returnNo||x.id)+'</td><td>'+e(d(x.returnDate||x.createdAt))+'</td><td>'+e(customerName(x.customerId))+'</td><td>'+e(x.invoiceNo||'')+'</td><td>'+e(productName(x.productId))+'</td><td>'+e(x.batchNo||'')+'</td><td>'+f(x.qty)+'</td><td>'+e(x.reason||'')+'</td><td>'+e(x.status||'quarantine')+'</td><td>'+((x.status||'quarantine')==='quarantine'&&activeManagement()?'<button class="btn ghost small" data-return-disposition="'+x.id+'">Disposition</button>':'')+'</td></tr>').join('')+
@@ -261,7 +280,7 @@ function renderReturns(){
 }
 
 function renderRecalls(){
-  const rows=state().regRecalls.slice(0,100);
+  const rows=regRows('regRecalls').slice(0,100);
   return '<div class="section-head"><div><h3>Recall Register</h3><div class="muted">Affected invoices/customers are identified from batch allocations.</div></div>'+(activeManagement()?'<button id="addRecallBtn" class="btn primary">+ Start Recall</button>':'')+'</div>'+
     '<div class="table-wrap"><table class="table"><thead><tr><th>Recall</th><th>Date</th><th>Product / Batch</th><th>Reason</th><th>Affected Customers</th><th>Recovered</th><th>Status</th><th></th></tr></thead><tbody>'+
     rows.map(x=>'<tr><td><b>'+e(x.recallNo||x.id)+'</b><div class="metric-note">'+e(x.drapReference||'')+'</div></td><td>'+e(d(x.recallDate||x.createdAt))+'</td><td>'+e(productName(x.productId))+'<br>'+e(x.batchNo||'')+'</td><td>'+e(x.reason||'')+'</td><td>'+f((x.affectedCustomers||[]).length)+'</td><td>'+f(x.recoveredQty||0)+' / '+f(x.estimatedDistributedQty||0)+'</td><td>'+e(x.status||'open')+'</td><td>'+(activeManagement()?'<button class="btn ghost small" data-edit-recall="'+x.id+'">Update</button>':'')+'</td></tr>').join('')+
@@ -269,7 +288,7 @@ function renderRecalls(){
 }
 
 function renderComplaints(){
-  const rows=state().regComplaints.slice(0,100);
+  const rows=regRows('regComplaints').slice(0,100);
   return '<div class="section-head"><h3>Quality / Distribution Complaint Register</h3>'+((activeManagement()||can('inventory'))?'<button id="addComplaintBtn" class="btn primary">+ Add Complaint</button>':'')+'</div>'+
     '<div class="table-wrap"><table class="table"><thead><tr><th>Complaint</th><th>Date</th><th>Product / Batch</th><th>Reporter</th><th>Type</th><th>Seriousness</th><th>Status</th><th>Notifications</th><th></th></tr></thead><tbody>'+
     rows.map(x=>'<tr><td>'+e(x.complaintNo||x.id)+'</td><td>'+e(d(x.complaintDate||x.createdAt))+'</td><td>'+e(productName(x.productId))+'<br>'+e(x.batchNo||'')+'</td><td>'+e(x.reporter||customerName(x.customerId))+'</td><td>'+e(x.complaintType||'')+'</td><td>'+e(x.seriousness||'')+'</td><td>'+e(x.status||'open')+'</td><td>Manufacturer: '+e(x.manufacturerNotified?'Yes':'No')+'<br>DRAP: '+e(x.drapNotified?'Yes':'No')+'</td><td>'+(activeManagement()?'<button class="btn ghost small" data-edit-complaint="'+x.id+'">Update</button>':'')+'</td></tr>').join('')+
@@ -277,19 +296,19 @@ function renderComplaints(){
 }
 
 function renderControlled(){
-  const chronological=state().regControlled.slice().sort((a,b)=>(asDate(a.transactionDate||a.createdAt)?.getTime()||0)-(asDate(b.transactionDate||b.createdAt)?.getTime()||0)),balances={},withBalance=chronological.map(function(x){const k=(x.productId||'')+'|'+(x.batchNo||'');balances[k]=(balances[k]||0)+Number(x.qtyIn||0)-Number(x.qtyOut||0);return Object.assign({},x,{runningBalance:balances[k]});}),rows=withBalance.reverse().slice(0,150);
+  const chronological=regRows('regControlled').slice().sort((a,b)=>(asDate(a.transactionDate||a.createdAt)?.getTime()||0)-(asDate(b.transactionDate||b.createdAt)?.getTime()||0)),balances={},withBalance=chronological.map(function(x){const k=(x.productId||'')+'|'+(x.batchNo||'');balances[k]=(balances[k]||0)+Number(x.qtyIn||0)-Number(x.qtyOut||0);return Object.assign({},x,{runningBalance:balances[k]});}),rows=withBalance.reverse().slice(0,150);
   return '<div class="section-head"><div><h3>Controlled Drug Transaction Register</h3><div class="muted">Controlled-product GRNs and approved sales are logged automatically; manual adjustments can also be recorded.</div></div>'+(activeManagement()?'<button id="addControlledBtn" class="btn primary">+ Manual Entry</button>':'')+'</div>'+
-    '<div class="table-wrap"><table class="table"><thead><tr><th>Date</th><th>Product</th><th>Batch</th><th>Type</th><th>In</th><th>Out</th><th>Reference</th><th>Party</th><th>Balance</th><th>By</th></tr></thead><tbody>'+
+    '<div class="table-wrap"><table class="table"><thead><tr><th>Date</th><th>Product</th><th>Batch</th><th>Type</th><th>In</th><th>Out</th><th>Reference</th><th>Party</th><th>Balance</th><th>By</th><th>Actions</th></tr></thead><tbody>'+
     rows.map(x=>'<tr><td>'+e(dt(x.transactionDate||x.createdAt))+'</td><td>'+e(productName(x.productId))+'</td><td>'+e(x.batchNo||'')+'</td><td>'+e(x.transactionType||'')+'</td><td>'+f(x.qtyIn||0)+'</td><td>'+f(x.qtyOut||0)+'</td><td>'+e(x.reference||'')+'</td><td>'+e(x.partyName||'')+'</td><td><b>'+f(x.runningBalance||0)+'</b></td><td>'+e(x.enteredByName||profileName(x.enteredBy))+'</td></tr>').join('')+
-    (rows.length?'':'<tr><td colspan="10" class="empty">No controlled-drug transactions.</td></tr>')+'</tbody></table></div>';
+    (rows.length?'':'<tr><td colspan="11" class="empty">No controlled-drug transactions.</td></tr>')+'</tbody></table></div>';
 }
 
 function renderCapa(){
-  const ins=state().regInspections.slice(0,100), capa=state().regCapa.slice(0,100);
+  const ins=regRows('regInspections').slice(0,100), capa=regRows('regCapa').slice(0,100);
   return '<div class="section-head"><h3>Self Inspection Register</h3>'+(activeManagement()?'<button id="addInspectionBtn" class="btn primary">+ Self Inspection Finding</button>':'')+'</div>'+
-    '<div class="table-wrap"><table class="table"><thead><tr><th>Date</th><th>Area</th><th>Inspector</th><th>Finding</th><th>Severity</th><th>Status</th></tr></thead><tbody>'+
-    ins.map(x=>'<tr><td>'+e(d(x.inspectionDate||x.createdAt))+'</td><td>'+e(x.area||'')+'</td><td>'+e(x.inspectorName||'')+'</td><td>'+e(x.finding||'')+'</td><td>'+e(x.severity||'')+'</td><td>'+e(x.status||'open')+'</td></tr>').join('')+
-    (ins.length?'':'<tr><td colspan="6" class="empty">No self-inspection findings.</td></tr>')+'</tbody></table></div>'+
+    '<div class="table-wrap"><table class="table"><thead><tr><th>Date</th><th>Area</th><th>Inspector</th><th>Finding</th><th>Severity</th><th>Status</th><th>Actions</th></tr></thead><tbody>'+
+    ins.map(x=>'<tr><td>'+e(d(x.inspectionDate||x.createdAt))+'</td><td>'+e(x.area||'')+'</td><td>'+e(x.inspectorName||'')+'</td><td>'+e(x.finding||'')+'</td><td>'+e(x.severity||'')+'</td><td>'+e(x.status||'open')+'</td><td>'+regActions('selfInspections','regInspections',x.id,'Self Inspection')+'</td></tr>').join('')+
+    (ins.length?'':'<tr><td colspan="7" class="empty">No self-inspection findings.</td></tr>')+'</tbody></table></div>'+
     '<div class="section-head"><h3>CAPA Register</h3>'+(activeManagement()?'<button id="addCapaBtn" class="btn primary">+ Add CAPA</button>':'')+'</div>'+
     '<div class="table-wrap"><table class="table"><thead><tr><th>CAPA</th><th>Source</th><th>Root Cause</th><th>Corrective</th><th>Preventive</th><th>Owner</th><th>Due</th><th>Status</th><th></th></tr></thead><tbody>'+
     capa.map(x=>'<tr><td>'+e(x.capaNo||x.id)+'</td><td>'+e(x.sourceType||'')+' '+e(x.sourceRef||'')+'</td><td>'+e(x.rootCause||'')+'</td><td>'+e(x.correctiveAction||'')+'</td><td>'+e(x.preventiveAction||'')+'</td><td>'+e(x.owner||'')+'</td><td>'+e(d(x.dueDate))+'</td><td>'+e(x.status||'open')+'</td><td>'+(activeManagement()?'<button class="btn ghost small" data-edit-capa="'+x.id+'">Update</button>':'')+'</td></tr>').join('')+
@@ -298,7 +317,7 @@ function renderCapa(){
 
 
 function renderDocuments(){
-  const rows=state().regDocuments||[];
+  const rows=regRows('regDocuments');
   return '<div class="section-head"><div><h3>Warranty / Authority Documents</h3><div class="muted">Generate Form 2A warranty from approved invoices and manufacturer/importer distribution authority letters.</div></div><div class="actions">'+
     (activeManagement()?'<button id="newWarrantyBtn" class="btn primary">+ Form 2A Warranty</button><button id="newAuthorityBtn" class="btn ghost">+ Authority Letter</button>':'')+
     '</div></div>'+
@@ -463,6 +482,7 @@ function customerLicenceTable(){
 }
 
 function bindCurrentTab(){
+  bindGenericRegActions();
   if(currentTab==='profile'&&$('#regProfileForm'))$('#regProfileForm').onsubmit=saveProfile;
   if(currentTab==='suppliers'){
     if($('#addSupplierBtn'))$('#addSupplierBtn').onclick=function(){openSupplierForm();};
