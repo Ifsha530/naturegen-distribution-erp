@@ -58,7 +58,12 @@ service cloud.firestore {
           && request.resource.data.role == 'salesman'
           && request.resource.data.active == true
           && request.resource.data.createdBy == request.auth.uid);
-      allow update: if isAdmin() || isERPManager();
+      allow update: if isAdmin() || isERPManager()
+        || (
+          isMarketingDirector()
+          && resource.data.role == 'salesman'
+          && request.resource.data.role == 'salesman'
+        );
       allow delete: if isAdmin() && !(resource.data.role in ['admin','marketing_director','erp_manager']);
     }
 
@@ -132,8 +137,17 @@ service cloud.firestore {
         )
         || (
           isAdmin()
-          && request.resource.data.get('active', true) == resource.data.get('active', true)
           && request.resource.data.get('complimentarySchemeEligible', false) == resource.data.get('complimentarySchemeEligible', false)
+          && (
+            request.resource.data.get('active', true) == resource.data.get('active', true)
+            || (
+              resource.data.get('active', true) == true
+              && request.resource.data.get('active', true) == false
+              && request.resource.data.deactivationReason is string
+              && request.resource.data.deactivationReason.size() > 0
+              && request.resource.data.deactivatedBy == request.auth.uid
+            )
+          )
         )
         || (
           isRecovery()
@@ -220,6 +234,24 @@ service cloud.firestore {
           )
         )
         || (
+          (isManagement() || (isSalesman() && resource.data.createdBy == request.auth.uid))
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'notes','correctionReason','editedBy','editedByName','editedAt','updatedAt'
+          ])
+          && request.resource.data.editedBy == request.auth.uid
+        )
+        || (
+          (isManagement() || (isSalesman() && resource.data.createdBy == request.auth.uid))
+          && saleStatus(resource.data) in ['draft','rejected','pending_approval']
+          && request.resource.data.status == 'cancelled'
+          && request.resource.data.dispatchEligible == false
+          && request.resource.data.stockApplied == false
+          && request.resource.data.softDeleted == true
+          && request.resource.data.cancelledBy == request.auth.uid
+          && request.resource.data.cancellationReason is string
+          && request.resource.data.cancellationReason.size() > 0
+        )
+        || (
           canControlInvoices()
           && saleStatus(resource.data) != 'cancelled'
           && request.resource.data.status == 'cancelled'
@@ -284,13 +316,21 @@ service cloud.firestore {
         && request.resource.data.salesmanId == saleAfter(request.resource.data.saleId).data.salesmanId;
 
       allow update: if
-        isAdmin()
-        && request.resource.data.diff(resource.data).affectedKeys()
-           .hasOnly(['reversed','reversedBy','reversedAt','reversalReason'])
-        && request.resource.data.reversed == true
-        && request.resource.data.reversedBy == request.auth.uid
-        && request.resource.data.reversalReason is string
-        && request.resource.data.reversalReason.size() > 0;
+        (
+          isManagement()
+          && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['method','reference','notes','editReason','editedBy','editedAt'])
+          && request.resource.data.editedBy == request.auth.uid
+        )
+        || (
+          isManagement()
+          && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['reversed','reversedBy','reversedAt','reversalReason'])
+          && request.resource.data.reversed == true
+          && request.resource.data.reversedBy == request.auth.uid
+          && request.resource.data.reversalReason is string
+          && request.resource.data.reversalReason.size() > 0
+        );
 
       allow delete: if isAdmin();
     }
@@ -334,7 +374,7 @@ service cloud.firestore {
           )
           || (
             request.resource.data.entryType == 'payment_reversal'
-            && canControlInvoices()
+            && isManagement()
             && paymentAfter(request.resource.data.sourceId).data.reversed == true
             && paymentAfter(request.resource.data.sourceId).data.reversedBy == request.auth.uid
           )
@@ -349,16 +389,49 @@ service cloud.firestore {
             request.resource.data.entryType in ['debit_note','credit_note','sales_return','approved_adjustment_debit','approved_adjustment_credit']
             && isManagement()
           )
+          || (
+            request.resource.data.entryType == 'ledger_void_reversal'
+            && isManagement()
+          )
         );
 
-      allow update: if false;
+      allow update: if
+        isManagement()
+        && (
+          (
+            request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['correctionNote','correctedBy','correctedAt'])
+            && request.resource.data.correctedBy == request.auth.uid
+          )
+          || (
+            resource.data.sourceType == 'adjustment'
+            && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['voided','voidReason','voidedBy','voidedAt'])
+            && request.resource.data.voided == true
+            && request.resource.data.voidedBy == request.auth.uid
+          )
+        );
       allow delete: if isAdmin();
     }
 
     match /stockMovements/{movementId} {
       allow read: if isAdmin() || isERPManager() || isInventory() || isMarketingDirector();
       allow create: if isAdmin() || isERPManager() || isInventory() || isMarketingDirector();
-      allow update: if false;
+      allow update: if isManagement()
+        && (
+          (
+            request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['notes','editedBy','editedAt'])
+            && request.resource.data.editedBy == request.auth.uid
+          )
+          || (
+            resource.data.movementType in ['adjustment_plus','adjustment_minus','damage']
+            && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['voided','voidReason','voidedBy','voidedAt'])
+            && request.resource.data.voided == true
+            && request.resource.data.voidedBy == request.auth.uid
+          )
+        );
       allow delete: if isAdmin();
     }
 
@@ -372,7 +445,14 @@ service cloud.firestore {
       allow read: if inspectionAccess();
       allow create: if inspectionAccess()
         && request.resource.data.createdBy == request.auth.uid;
-      allow update, delete: if false;
+      allow update: if isManagement()
+        && (
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['correctionNote','correctedBy','correctedByName','correctedAt','updatedAt'])
+          || request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['archived','archiveReason','archivedBy','archivedByName','archivedAt','updatedAt'])
+        );
+      allow delete: if false;
     }
 
     match /inventoryBatches/{batchId} {
@@ -416,7 +496,14 @@ service cloud.firestore {
       allow read: if inspectionAccess();
       allow create: if inspectionAccess()
         && request.resource.data.enteredBy == request.auth.uid;
-      allow update, delete: if false;
+      allow update: if isManagement()
+        && (
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['correctionNote','correctedBy','correctedByName','correctedAt','updatedAt'])
+          || request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['archived','archiveReason','archivedBy','archivedByName','archivedAt','updatedAt'])
+        );
+      allow delete: if false;
     }
 
     match /selfInspections/{inspectionId} {
@@ -466,6 +553,11 @@ service cloud.firestore {
               request.resource.data.status != 'approved'
               || request.resource.data.approvedBy == request.auth.uid
             )
+          )
+          || (
+            request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['description','correctionReason','editedBy','editedAt','updatedAt'])
+            && request.resource.data.editedBy == request.auth.uid
           )
           || (
             expenseStatus(resource.data) != 'cancelled'
