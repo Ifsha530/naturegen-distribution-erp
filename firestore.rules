@@ -427,6 +427,45 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    match /samples/{sampleId} {
+      allow read: if isManagement() || isInventory()
+        || (isSalesman() && resource.data.issuedById == request.auth.uid);
+
+      allow create: if
+        (isManagement() || isInventory())
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.status == 'issued'
+        && request.resource.data.qty > 0
+        && request.resource.data.totalCost >= 0
+        && request.resource.data.productId is string
+        && get(/databases/$(database)/documents/products/$(request.resource.data.productId)).data.get('controlledDrug', false) == false;
+
+      allow update: if
+        (isManagement() || isInventory())
+        && (
+          (
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'sampleDate','issuedById','issuedByName','recipientType','recipientName',
+              'recipientContact','location','purpose','notes','editReason',
+              'editedBy','editedByName','editedAt','updatedAt'
+            ])
+            && request.resource.data.editedBy == request.auth.uid
+          )
+          || (
+            resource.data.status == 'issued'
+            && request.resource.data.status == 'reversed'
+            && request.resource.data.reversedBy == request.auth.uid
+            && request.resource.data.reversalReason is string
+            && request.resource.data.reversalReason.size() > 0
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'status','reversalReason','reversedBy','reversedByName','reversedAt','updatedAt'
+            ])
+          )
+        );
+
+      allow delete: if false;
+    }
+
     match /stockMovements/{movementId} {
       allow read: if isAdmin() || isERPManager() || isInventory() || isMarketingDirector();
       allow create: if isAdmin() || isERPManager() || isInventory() || isMarketingDirector();
